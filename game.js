@@ -615,52 +615,49 @@ function startNewGame() {
 
 /* ----------------- Render ----------------- */
 function drawBackground(rw, rh) {
-  // Grama clara (área “explorada”)
-  ctx.fillStyle = "#6fc15a";
+  // GRAMA (fica sempre embaixo)
+  ctx.fillStyle = "#66b96a"; // verde claro
   ctx.fillRect(0, 0, rw, rh);
 
-  // Textura sutil (sem escurecer)
+  // textura leve (opcional, mas ajuda a não ficar “chapado”)
   ctx.globalAlpha = 0.10;
   for (let i = 0; i < 180; i++) {
     const x = (i * 97) % rw;
     const y = (i * 53) % rh;
-    ctx.fillStyle = (i % 2 === 0) ? "#66b955" : "#79cc63";
+    ctx.fillStyle = (i % 2 === 0) ? "#5aa85e" : "#73c976";
     ctx.fillRect(x, y, 16, 12);
   }
   ctx.globalAlpha = 1;
 }
 
 function drawFog(rw, rh) {
-  // Névoa cinza cobrindo tudo e “recortes” 100% limpos (sem degradê)
-  // para evitar que áreas já exploradas voltem a ficar cinza quando círculos se sobrepõem.
+  // NÉVOA (fica por cima) — áreas exploradas são “furos” transparentes
   ctx.save();
 
-  // camada de névoa
-  ctx.fillStyle = "rgba(120,120,120,0.55)";
+  // camada cinza cobrindo tudo
+  ctx.globalCompositeOperation = "source-over";
+  ctx.fillStyle = "rgba(140,140,140,0.70)";
   ctx.fillRect(0, 0, rw, rh);
 
-  // recortar (remover) a névoa nas áreas visíveis
+  // recorta (remove a névoa) nas áreas com visão
   ctx.globalCompositeOperation = "destination-out";
 
   const base = nodeById(state.world.baseNodeId);
   const sources = [];
 
-  // visão da base
   sources.push({ x: base.x, y: base.y, radius: CFG.fog.baseVision });
 
-  // visão adicional por territórios dominados
   for (const n of state.world.nodes.values()) {
     if (n.kind === "OWNED") {
       sources.push({ x: n.x, y: n.y, radius: CFG.fog.territoryVision });
     }
   }
 
-  // recorte total (sem borda suave) — não “re-cinza” em emendas
+  // recorte “seco” (sem degradê) para evitar artefatos nas emendas
   for (const s of sources) {
     const p = worldToScreen(s.x, s.y);
     const R = s.radius * state.camera.zoom;
 
-    ctx.fillStyle = "rgba(0,0,0,1)";
     ctx.beginPath();
     ctx.arc(p.x, p.y, R, 0, Math.PI * 2);
     ctx.fill();
