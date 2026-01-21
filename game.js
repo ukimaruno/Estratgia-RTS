@@ -31,8 +31,8 @@ const CFG = {
   startResources: { wood: 200, stone: 120, meat: 120 },
   buildings: {
     FARM:     { name: "Fazenda",     cost: { wood: 50, stone: 10, meat: 0 }, buildTurns: 1, prod: { meat: 30 }, icon: "🌾" },
-    LUMBER:   { name: "Serralheria", cost: { wood: 60, stone: 0,  meat: 0 }, buildTurns: 1, prod: { wood: 25 }, icon: "🪵" },
-    QUARRY:   { name: "Pedreira",    cost: { wood: 40, stone: 40, meat: 0 }, buildTurns: 1, prod: { stone: 20 }, icon: "🪨" },
+    LUMBER:   { name: "Serralheria", cost: { wood: 60, stone: 0,  meat: 0 }, buildTurns: 1, prod: { wood: 25 }, icon: "🌲" },
+    QUARRY:   { name: "Pedreira",    cost: { wood: 40, stone: 40, meat: 0 }, buildTurns: 1, prod: { stone: 20 }, icon: "🏔️" },
     HOUSE:    { name: "Casa",        cost: { wood: 70, stone: 0,  meat: 0 }, buildTurns: 1, prod: null,         icon: "🏠" },
     BARRACKS: { name: "Quartel",     cost: { wood: 120, stone: 60, meat: 0 }, buildTurns: 2, prod: null,         icon: "🏹" },
   },
