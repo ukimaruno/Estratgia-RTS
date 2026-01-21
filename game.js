@@ -674,6 +674,10 @@ function drawWorld() {
   const r = canvas.getBoundingClientRect();
   const rw = r.width, rh = r.height;
 
+  // GARANTE que o canvas vai desenhar normalmente (não “apagar”)
+  ctx.globalCompositeOperation = "source-over";
+  ctx.globalAlpha = 1;
+
   drawBackground(rw, rh);
 
   if (!state) return;
