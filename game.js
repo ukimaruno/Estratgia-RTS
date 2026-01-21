@@ -615,17 +615,17 @@ function startNewGame() {
 
 /* ----------------- Render ----------------- */
 function drawBackground(rw, rh) {
-  // Grama clara (para o “círculo de visão” parecer verde, não preto)
-  ctx.fillStyle = "#4fa84a";
+  // Grama clara (área “explorada”)
+  ctx.fillStyle = "#6fc15a";
   ctx.fillRect(0, 0, rw, rh);
 
-  // Textura suave (variação de tons para ficar menos “chapado”)
+  // Textura sutil (sem escurecer)
   ctx.globalAlpha = 0.10;
-  for (let i = 0; i < 220; i++) {
-    const x = (i * 73) % rw;
-    const y = (i * 41) % rh;
-    ctx.fillStyle = (i % 2 === 0) ? "#459a40" : "#5bb556";
-    ctx.fillRect(x, y, 18, 12);
+  for (let i = 0; i < 180; i++) {
+    const x = (i * 97) % rw;
+    const y = (i * 53) % rh;
+    ctx.fillStyle = (i % 2 === 0) ? "#66b955" : "#79cc63";
+    ctx.fillRect(x, y, 16, 12);
   }
   ctx.globalAlpha = 1;
 }
