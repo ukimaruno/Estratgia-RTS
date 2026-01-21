@@ -631,46 +631,41 @@ function drawBackground(rw, rh) {
 }
 
 function drawFog(rw, rh) {
-  // Névoa uniforme (cinza) + “recorte” suave (sem anel duro)
+  // Névoa cinza somente onde NÃO há visão.
+  // Importante: NÃO usamos destination-out, porque isso “apaga” o mapa e aparece preto.
+
   ctx.save();
-
-  // 1) pinta tudo de cinza (área não explorada)
   ctx.globalCompositeOperation = "source-over";
-  ctx.fillStyle = "rgba(170,170,170,0.80)";
-  ctx.fillRect(0, 0, rw, rh);
+  ctx.fillStyle = "rgba(160, 160, 160, 0.88)";
 
-  // 2) abre buracos na névoa (áreas exploradas/visíveis)
-  ctx.globalCompositeOperation = "destination-out";
+  // Desenha um retângulo da névoa (tela inteira) e “fura” buracos circulares nas áreas visíveis.
+  ctx.beginPath();
+  ctx.rect(0, 0, rw, rh);
 
   const base = nodeById(state.world.baseNodeId);
   const sources = [];
 
-  // base sempre revela
+  // visão da base
   sources.push({ x: base.x, y: base.y, radius: CFG.fog.baseVision });
 
-  // territórios dominados também revelam
+  // visão adicional por territórios dominados
   for (const n of state.world.nodes.values()) {
     if (n.kind === "OWNED") {
       sources.push({ x: n.x, y: n.y, radius: CFG.fog.territoryVision });
     }
   }
 
+  // buracos (áreas visíveis)
   for (const s of sources) {
     const p = worldToScreen(s.x, s.y);
     const R = s.radius * state.camera.zoom;
 
-    // Gradiente radial: centro totalmente “aberto”, borda suavizada
-    const g = ctx.createRadialGradient(p.x, p.y, R * 0.70, p.x, p.y, R);
-    g.addColorStop(0.00, "rgba(0,0,0,1)");
-    g.addColorStop(0.90, "rgba(0,0,0,1)");
-    g.addColorStop(1.00, "rgba(0,0,0,0)");
-
-    ctx.fillStyle = g;
-    ctx.beginPath();
+    ctx.moveTo(p.x + R, p.y);
     ctx.arc(p.x, p.y, R, 0, Math.PI * 2);
-    ctx.fill();
   }
 
+  // “evenodd” faz a névoa preencher só fora dos buracos
+  ctx.fill("evenodd");
   ctx.restore();
 }
 
