@@ -78,6 +78,9 @@ html,body{height:100%; margin:0; background:var(--bg); color:var(--text); font-f
   background:#0b0d12;
   z-index:10;
 }
+
+#game { background: #6fc15a; }  /* <- ADICIONE ISTO AQUI */
+
 canvas{width:100%; height:100%; display:block;}
 
 .sectionTitle{
