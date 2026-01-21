@@ -631,16 +631,16 @@ function drawBackground(rw, rh) {
 }
 
 function drawFog(rw, rh) {
-  // Névoa cinza somente onde NÃO há visão.
-  // Importante: NÃO usamos destination-out, porque isso “apaga” o mapa e aparece preto.
-
+  // Névoa cinza cobrindo tudo e “recortes” 100% limpos (sem degradê)
+  // para evitar que áreas já exploradas voltem a ficar cinza quando círculos se sobrepõem.
   ctx.save();
-  ctx.globalCompositeOperation = "source-over";
-  ctx.fillStyle = "rgba(160, 160, 160, 0.88)";
 
-  // Desenha um retângulo da névoa (tela inteira) e “fura” buracos circulares nas áreas visíveis.
-  ctx.beginPath();
-  ctx.rect(0, 0, rw, rh);
+  // camada de névoa
+  ctx.fillStyle = "rgba(120,120,120,0.55)";
+  ctx.fillRect(0, 0, rw, rh);
+
+  // recortar (remover) a névoa nas áreas visíveis
+  ctx.globalCompositeOperation = "destination-out";
 
   const base = nodeById(state.world.baseNodeId);
   const sources = [];
@@ -655,17 +655,17 @@ function drawFog(rw, rh) {
     }
   }
 
-  // buracos (áreas visíveis)
+  // recorte total (sem borda suave) — não “re-cinza” em emendas
   for (const s of sources) {
     const p = worldToScreen(s.x, s.y);
     const R = s.radius * state.camera.zoom;
 
-    ctx.moveTo(p.x + R, p.y);
+    ctx.fillStyle = "rgba(0,0,0,1)";
+    ctx.beginPath();
     ctx.arc(p.x, p.y, R, 0, Math.PI * 2);
+    ctx.fill();
   }
 
-  // “evenodd” faz a névoa preencher só fora dos buracos
-  ctx.fill("evenodd");
   ctx.restore();
 }
 
