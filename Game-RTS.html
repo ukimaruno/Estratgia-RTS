@@ -1,0 +1,1588 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Kingdom Turnos — MVP (Base + Slots)</title>
+  <style>
+    :root{
+      --bg:#0f1115;
+      --panel:#151923;
+      --panel2:#111520;
+      --text:#e8ecf2;
+      --muted:#aeb6c4;
+      --accent:#4aa3ff;
+      --good:#47d18c;
+      --warn:#ffcc66;
+      --bad:#ff5d5d;
+      --line:rgba(255,255,255,.10);
+      --shadow: 0 10px 30px rgba(0,0,0,.35);
+      --radius:12px;
+      --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    }
+    html,body{height:100%; margin:0; background:var(--bg); color:var(--text); font-family:var(--font); overflow:hidden;}
+    #root{position:relative; width:100%; height:100%;}
+
+    #topbar{
+      position:absolute; left:12px; right:12px; top:12px;
+      background:linear-gradient(180deg, rgba(21,25,35,.95), rgba(17,21,32,.92));
+      border:1px solid var(--line);
+      border-radius:var(--radius);
+      box-shadow:var(--shadow);
+      padding:10px 12px;
+      display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+      z-index:30;
+      user-select:none;
+    }
+    .pill{
+      display:flex; align-items:center; gap:8px;
+      padding:6px 10px;
+      background:rgba(255,255,255,.06);
+      border:1px solid rgba(255,255,255,.10);
+      border-radius:999px;
+      font-size:13px;
+      color:var(--muted);
+    }
+    .pill b{color:var(--text); font-weight:800;}
+    .pill .dot{
+      width:8px; height:8px; border-radius:50%;
+      background:var(--accent); box-shadow:0 0 0 3px rgba(74,163,255,.15);
+    }
+
+    #leftPanel, #rightPanel, #logPanel{
+      position:absolute; background:linear-gradient(180deg, rgba(21,25,35,.95), rgba(17,21,32,.92));
+      border:1px solid var(--line);
+      border-radius:var(--radius);
+      box-shadow:var(--shadow);
+      z-index:25;
+      user-select:none;
+    }
+    #leftPanel{
+      left:12px; top:72px; width:290px; bottom:132px;
+      padding:12px;
+      overflow:auto;
+    }
+    #rightPanel{
+      right:12px; top:72px; width:340px; bottom:132px;
+      padding:12px;
+      overflow:auto;
+    }
+    #logPanel{
+      left:12px; right:12px; bottom:12px; height:104px;
+      padding:10px 12px;
+      display:flex; flex-direction:column; gap:8px;
+    }
+    #log{
+      flex:1; overflow:auto; font-size:12px; color:var(--muted);
+      border-top:1px solid rgba(255,255,255,.08);
+      padding-top:8px;
+    }
+    #log .item{margin-bottom:6px;}
+    #log .time{color:rgba(255,255,255,.55); margin-right:8px;}
+    .sectionTitle{
+      font-size:12px; letter-spacing:.08em; text-transform:uppercase;
+      color:rgba(255,255,255,.65);
+      margin:0 0 10px 0;
+    }
+    .card{
+      border:1px solid rgba(255,255,255,.10);
+      background:rgba(255,255,255,.05);
+      border-radius:12px;
+      padding:10px;
+      margin-bottom:10px;
+    }
+    .row{display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap;}
+    .muted{color:var(--muted);}
+    .small{font-size:12px;}
+    .btn{
+      appearance:none; border:1px solid rgba(255,255,255,.14);
+      background:rgba(255,255,255,.06);
+      color:var(--text);
+      border-radius:10px;
+      padding:8px 10px;
+      font-size:13px;
+      cursor:pointer;
+      transition:transform .05s ease, background .15s ease, border-color .15s ease;
+    }
+    .btn:hover{background:rgba(255,255,255,.09); border-color:rgba(255,255,255,.20);}
+    .btn:active{transform:translateY(1px);}
+    .btn.primary{background:rgba(74,163,255,.16); border-color:rgba(74,163,255,.45);}
+    .btn.primary:hover{background:rgba(74,163,255,.22); border-color:rgba(74,163,255,.55);}
+    .btn.good{background:rgba(71,209,140,.14); border-color:rgba(71,209,140,.45);}
+    .btn.bad{background:rgba(255,93,93,.14); border-color:rgba(255,93,93,.45);}
+    .btn.wide{width:100%;}
+    .grid2{display:grid; grid-template-columns:1fr 1fr; gap:8px;}
+    .kv{display:flex; justify-content:space-between; gap:10px; font-size:13px; color:var(--muted);}
+    .kv b{color:var(--text);}
+    .hr{height:1px; background:rgba(255,255,255,.08); margin:10px 0;}
+    .tag{
+      display:inline-flex; align-items:center; gap:6px;
+      font-size:12px; padding:4px 8px; border-radius:999px;
+      background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.10);
+      color:var(--muted);
+    }
+
+    #gameWrap{
+      position:absolute; left:314px; right:364px; top:72px; bottom:132px;
+      border-radius:var(--radius);
+      overflow:hidden;
+      border:1px solid rgba(255,255,255,.10);
+      box-shadow:var(--shadow);
+      background:#0b0d12;
+      z-index:10;
+    }
+    canvas{width:100%; height:100%; display:block;}
+
+    #menuOverlay{
+      position:absolute; inset:0;
+      display:flex; align-items:center; justify-content:center;
+      background:radial-gradient(circle at 50% 30%, rgba(255,220,140,.16), rgba(15,17,21,.92) 60%, rgba(15,17,21,.98));
+      z-index:50;
+    }
+    #menuCard{
+      width:min(760px, 92vw);
+      background:linear-gradient(180deg, rgba(21,25,35,.98), rgba(17,21,32,.95));
+      border:1px solid rgba(255,255,255,.12);
+      border-radius:18px;
+      box-shadow:0 25px 70px rgba(0,0,0,.55);
+      padding:18px;
+    }
+    #menuCard h1{margin:0 0 6px 0; font-size:18px;}
+    #menuCard p{margin:0 0 10px 0; color:var(--muted); font-size:13px; line-height:1.35;}
+    #seedInput{
+      width:100%;
+      padding:10px 12px;
+      border-radius:12px;
+      border:1px solid rgba(255,255,255,.14);
+      background:rgba(255,255,255,.06);
+      color:var(--text);
+      outline:none;
+      font-size:14px;
+    }
+    #hint{
+      margin-top:10px; font-size:12px; color:rgba(255,255,255,.70);
+      line-height:1.35;
+    }
+    kbd{
+      font-family:ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size:12px; color:var(--text);
+      background:rgba(255,255,255,.08);
+      border:1px solid rgba(255,255,255,.12);
+      border-bottom-color:rgba(255,255,255,.18);
+      padding:2px 6px; border-radius:8px;
+      margin-right:4px;
+    }
+  
+  .troopSlotsGrid{
+    display:grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap:8px;
+    margin-top:10px;
+  }
+  .troopSlot{
+    border:1px solid rgba(255,255,255,0.25);
+    background: rgba(255,255,255,0.08);
+    border-radius:10px;
+    padding:10px 8px;
+    text-align:center;
+    cursor: default;
+  }
+  .troopSlot.filled{
+    border-color: rgba(255,213,74,0.55);
+    background: rgba(255,213,74,0.10);
+  }
+  .troopName{ font-weight:700; font-size:12px; }
+</style>
+</head>
+<body>
+<div id="root">
+
+  <div id="topbar">
+    <div class="pill"><span class="dot"></span><b id="resWood">0</b><span>Madeira</span></div>
+    <div class="pill"><span class="dot" style="background:#c7cbd6; box-shadow:0 0 0 3px rgba(199,203,214,.12)"></span><b id="resStone">0</b><span>Pedra</span></div>
+    <div class="pill"><span class="dot" style="background:#ffcc66; box-shadow:0 0 0 3px rgba(255,204,102,.12)"></span><b id="resMeat">0</b><span>Carne</span></div>
+    <div class="pill"><span class="dot" style="background:#47d18c; box-shadow:0 0 0 3px rgba(71,209,140,.12)"></span><span>Turno:</span><b id="turnNum">1</b></div>
+    <div class="pill"><span class="dot" style="background:#8a7dff; box-shadow:0 0 0 3px rgba(138,125,255,.12)"></span><span>Seed:</span><b id="seedShow">—</b></div>
+    <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+      <button class="btn good" id="btnEndTurn">Passar Turno</button>
+      <button class="btn" id="btnSave">Salvar</button>
+      <button class="btn" id="btnLoad">Carregar</button>
+      <button class="btn bad" id="btnMenu">Menu</button>
+    </div>
+  </div>
+
+  <div id="leftPanel">
+    <div class="sectionTitle">Seleção</div>
+    <div id="selectionInfo" class="card small muted">Clique no castelo ou em um slot.</div>
+
+    <div class="sectionTitle">Como jogar</div>
+    <div class="card small muted">
+      <div style="margin-bottom:6px;"><kbd>1</kbd> Clique em um slot (quadrado claro ao redor do castelo).</div>
+      <div style="margin-bottom:6px;"><kbd>2</kbd> Escolha a construção no painel “Construção”.</div>
+      <div style="margin-bottom:6px;"><kbd>3</kbd> Clique em <b>Passar Turno</b> para concluir construções e coletar recursos.</div>
+      <div class="hr"></div>
+      <div class="small muted">Dica: o mapa é verde; áreas não vistas ficam em cinza (fog).</div>
+    </div>
+
+    <div class="sectionTitle">Controles</div>
+    <div class="card small muted">
+      <div class="item"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> ou <kbd>←</kbd><kbd>↑</kbd><kbd>→</kbd><kbd>↓</kbd> para mover a câmera</div>
+      <div class="item"><kbd>Esc</kbd> cancela o modo de construção</div>
+    </div>
+  </div>
+
+  <div id="rightPanel">
+    <div class="sectionTitle">Ações</div>
+    <div id="actionPanel" class="card small muted">
+      Selecione um slot. Depois escolha uma construção.
+    </div>
+
+    <div class="sectionTitle">Construção (Turnos)</div>
+    <div id="buildPanel" class="card small muted">
+      Selecione um slot para habilitar construções.
+    </div>
+
+    <div class="sectionTitle">Tropas</div>
+    <div id="troopsPanel" class="card small muted">
+      Ainda não disponível. Construa <b>Quartel</b> para liberar slots de tropas.
+    </div>
+  </div>
+
+  <div id="gameWrap">
+    <canvas id="game"></canvas>
+  </div>
+
+  <div id="logPanel">
+    <div class="row">
+      <div class="sectionTitle" style="margin:0;">Log</div>
+      <div class="small muted">Visual medieval + slots claros. Turnos (dia) para executar ações.</div>
+    </div>
+    <div id="log"></div>
+  </div>
+
+  <div id="menuOverlay">
+    <div id="menuCard">
+      <h1>Kingdom Turnos — MVP</h1>
+      <p>
+        Base (castelo) com <b>6 slots</b>. Construa fazenda, madeireira e pedreira.
+        Cada <b>Passar Turno</b> equivale a um dia: conclui construções e coleta recursos.
+      </p>
+      <div class="card">
+        <div class="sectionTitle">Seed do mundo</div>
+        <input id="seedInput" placeholder="Ex.: reino-medieval-123 (vazio = aleatória)" />
+        <div class="hr"></div>
+        <div class="grid2">
+          <button class="btn primary wide" id="btnNew">Novo Jogo</button>
+          <button class="btn wide" id="btnLoadMenu">Carregar Jogo</button>
+        </div>
+        <div id="hint">
+          Construções básicas: <b>1 turno</b>. Quartel: <b>2 turnos</b>.<br/>
+          Fog: áreas não vistas ficam em cinza; ao redor do castelo fica visível.<br/>
+          Próximo passo: mapa com monstros + batalha lateral (2D de lado).
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+
+<script>
+(() => {
+  "use strict";
+
+  /* ========= DOM ========= */
+  const el = {
+    canvas: document.getElementById("game"),
+    ctx: document.getElementById("game").getContext("2d"),
+    menuOverlay: document.getElementById("menuOverlay"),
+    seedInput: document.getElementById("seedInput"),
+    btnNew: document.getElementById("btnNew"),
+    btnContinue: document.getElementById("btnContinue"),
+    btnEndTurn: document.getElementById("btnEndTurn"),
+    btnSave: document.getElementById("btnSave"),
+    btnLoad: document.getElementById("btnLoad"),
+    btnHelp: document.getElementById("btnHelp"),
+    resourcesPanel: document.getElementById("resourcesPanel"),
+    selectedPanel: document.getElementById("selectedPanel"),
+    actionsPanel: document.getElementById("actionsPanel"),
+    buildPanel: document.getElementById("buildPanel"),
+    troopsPanel: document.getElementById("troopsPanel"),
+    log: document.getElementById("log"),
+  };
+
+  /* ========= CONFIG ========= */
+  const CFG = {
+    tile: 24,
+    terrTiles: 16,
+    slot: {
+      size: 18,
+      ring: [
+        { idx: 1, dx: -26, dy: -26 },
+        { idx: 2, dx:  0, dy: -32 },
+        { idx: 3, dx:  26, dy: -26 },
+        { idx: 4, dx:  26, dy:  26 },
+        { idx: 5, dx:  0, dy:  32 },
+        { idx: 6, dx: -26, dy:  26 },
+      ]
+    },
+    zoom: { min: 0.55, max: 2.6, step: 1.10 },
+    visibility: {
+      baseReveal: 9,
+      territoryReveal: 7,
+      alwaysRevealPath: true
+    }
+  };
+
+  const BUILDINGS = {
+    TOWN_CENTER: { name: "Base (Castelo)", cost:{wood:0, stone:0, meat:0}, turns:0, income:null, icon:"🏰" },
+    FARM:        { name: "Fazenda",        cost:{wood:25, stone:0, meat:0}, turns:1, income:{meat:10}, icon:"🌾" },
+    QUARRY:      { name: "Pedreira",       cost:{wood:20, stone:0, meat:0}, turns:1, income:{stone:10}, icon:"⛏️" },
+    SMITHY:      { name: "Serralheria",    cost:{wood:25, stone:10, meat:0}, turns:1, income:{wood:10}, icon:"🪚" },
+    HOUSE:       { name: "Casa",           cost:{wood:30, stone:10, meat:0}, turns:1, income:null, icon:"🏠" },
+    BARRACKS:    { name: "Quartel",        cost:{wood:60, stone:40, meat:20}, turns:2, income:null, icon:"🛡️" }
+  };
+
+  const UNITS = {
+    WARRIOR: { name:"Guerreiro", cost:{meat:20}, turns:1, icon:"⚔️" },
+    ARCHER:  { name:"Arqueiro",  cost:{meat:25}, turns:1, icon:"🏹" },
+  };
+
+  /* ========= UTIL ========= */
+  function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+  function now(){ return (typeof performance !== "undefined" ? performance.now() : Date.now()); }
+
+  // Deterministic hash for terrain / procedural bits
+  function hash32(x){
+    x |= 0;
+    x ^= x >>> 16; x = Math.imul(x, 0x7feb352d);
+    x ^= x >>> 15; x = Math.imul(x, 0x846ca68b);
+    x ^= x >>> 16;
+    return x >>> 0;
+  }
+  function hash2(a,b,seed){
+    let x = (a|0) * 374761393 + (b|0) * 668265263 + (seed|0) * 1442695041;
+    return hash32(x);
+  }
+
+  function kTerr(Tx,Ty){ return `${Tx},${Ty}`; }
+  function kTile(tx,ty){ return `${tx},${ty}`; }
+
+  function logLine(msg){
+    const t = new Date().toLocaleTimeString();
+    el.log.innerHTML = `<div><span style="color:#8aa0b6">[${t}]</span> ${msg}</div>` + el.log.innerHTML;
+  }
+
+  function canAfford(res, cost){
+    return Object.keys(cost).every(k => (res[k]||0) >= (cost[k]||0));
+  }
+  function pay(res, cost){
+    for(const k of Object.keys(cost)){
+      res[k] = (res[k]||0) - (cost[k]||0);
+    }
+  }
+
+  /* ========= GAME STATE ========= */
+  let GAME = null;
+
+  function makeGame(seedStr){
+    const seed = (seedStr && seedStr.trim()) ? seedStr.trim() : "demo";
+    const seed32 = hash32([...seed].reduce((a,c)=>a + c.charCodeAt(0), 0));
+
+    const gs = {
+      version: 5,
+      seed,
+      seed32,
+      running: false,
+      turn: 1,
+      camera: { x: 0, y: 0, zoom: 1 },
+      resources: { wood: 80, stone: 50, meat: 60 }, // suficiente para Fazenda + Serralheria + Pedreira
+      entities: new Map(),
+      nextId: 1,
+      territories: new Map(),
+      discovered: new Set(),
+      visible: new Set(),
+      nodes: { monster0: { tileX: 24, tileY: 8, alive: true } }, // 1 território a leste do centro
+      ui: {
+        activeTerrKey: kTerr(0,0),
+        activeSlotIdx: null,
+        selectedEntityId: null,
+        buildChoice: null,
+        recruitSlotIdx: null,
+        moveMode: false,
+        moveSelected: new Set(),   // unitIds
+        pendingMoveDest: null,     // {tileX,tileY,nodeId?}
+        dragging: false,
+        dragStart: null,
+      },
+      actions: {
+        moves: [] // {unitIds, to:{tileX,tileY,nodeId}, turnsLeft}
+      }
+    };
+
+    ensureTerritory(gs, 0, 0);
+
+    // Base no centro do território (0,0)
+    const base = spawnBuilding(gs, "TOWN_CENTER", 0, 0, 0);
+    gs.baseId = base.id;
+
+    // Câmera centralizada na base
+    const bp = buildingWorldPos(gs, base);
+    gs.camera.x = bp.x;
+    gs.camera.y = bp.y;
+    gs.camera.zoom = 1;
+
+    // Visibilidade inicial
+    refreshVisibility(gs, true);
+
+    return gs;
+  }
+
+  function ensureTerritory(gs, Tx, Ty){
+    const key = kTerr(Tx,Ty);
+    if(gs.territories.has(key)) return gs.territories.get(key);
+
+    const terr = {
+      Tx, Ty,
+      ownedByPlayer: (Tx===0 && Ty===0),
+      // slots de construção ao redor do castelo (idx 1..6). slotIdx 0 é reservado para o castelo.
+      slots: CFG.slot.ring.map(s => ({ idx: s.idx, buildingId: null })),
+    };
+    gs.territories.set(key, terr);
+    return terr;
+  }
+
+  function spawnBuilding(gs, buildingType, Tx, Ty, slotIdx){
+    const def = BUILDINGS[buildingType];
+    const id = gs.nextId++;
+    const ent = {
+      id,
+      type: "building",
+      buildingType,
+      owner: "player",
+      Tx, Ty,
+      slotIdx, // 0 = castelo; 1..6 = slots
+      turnsLeft: def.turns,
+      constructed: def.turns === 0,
+      garrison: null, // no quartel
+    };
+    if(buildingType === "BARRACKS"){
+      ent.garrison = { slots: [], training: {} }; // slots => unitId|null ; training[slot]=turnsLeft
+    }
+    gs.entities.set(id, ent);
+
+    // Se for slot de construção, marca no território
+    if(slotIdx >= 1){
+      const terr = ensureTerritory(gs, Tx, Ty);
+      const s = terr.slots.find(x => x.idx === slotIdx);
+      if(s) s.buildingId = id;
+    }
+    return ent;
+  }
+
+  function spawnUnit(gs, unitType, atTileX, atTileY, homeBarracksId){
+    const def = UNITS[unitType];
+    const id = gs.nextId++;
+    const unit = {
+      id,
+      type: "unit",
+      unitType,
+      owner: "player",
+      tileX: atTileX,
+      tileY: atTileY,
+      state: "garrison", // garrison | moving | field
+      homeBarracksId: homeBarracksId || null,
+      turnsLeft: def.turns,
+      ready: def.turns === 0
+    };
+    gs.entities.set(id, unit);
+    return unit;
+  }
+
+  function buildingWorldPos(gs, b){
+    // Território (Tx,Ty) ocupa 16x16 tiles
+    const baseTileX = b.Tx * CFG.terrTiles + Math.floor(CFG.terrTiles/2);
+    const baseTileY = b.Ty * CFG.terrTiles + Math.floor(CFG.terrTiles/2);
+    // slot 0 = castelo, pos centro
+    const centerX = baseTileX * CFG.tile;
+    const centerY = baseTileY * CFG.tile;
+
+    if(b.slotIdx === 0) return { x: centerX, y: centerY };
+
+    const ring = CFG.slot.ring.find(s => s.idx === b.slotIdx);
+    return { x: centerX + ring.dx, y: centerY + ring.dy };
+  }
+
+  function territoryCenterTile(Tx,Ty){
+    return {
+      tx: Tx * CFG.terrTiles + Math.floor(CFG.terrTiles/2),
+      ty: Ty * CFG.terrTiles + Math.floor(CFG.terrTiles/2),
+    };
+  }
+
+  function refreshVisibility(gs, initial=false){
+    gs.visible = new Set();
+
+    // Revela em torno de cada território do jogador (por enquanto, só (0,0))
+    for(const terr of gs.territories.values()){
+      if(!terr.ownedByPlayer) continue;
+      const c = territoryCenterTile(terr.Tx, terr.Ty);
+      const r = (terr.Tx===0 && terr.Ty===0) ? CFG.visibility.baseReveal : CFG.visibility.territoryReveal;
+      revealCircle(gs, c.tx, c.ty, r, true);
+    }
+
+    // Caminho inicial até monstros (sempre visível)
+    if(CFG.visibility.alwaysRevealPath){
+      const baseC = territoryCenterTile(0,0);
+      const m = gs.nodes.monster0;
+      const path = lineTiles(baseC.tx, baseC.ty, m.tileX, m.tileY);
+      for(const p of path){
+        gs.visible.add(kTile(p.tx, p.ty));
+        gs.discovered.add(kTile(p.tx, p.ty));
+      }
+      // marca também o próprio nó de monstros
+      gs.visible.add(kTile(m.tileX, m.tileY));
+      gs.discovered.add(kTile(m.tileX, m.tileY));
+    }
+
+    if(initial){
+      // descobre também o que está visível no início
+      for(const k of gs.visible) gs.discovered.add(k);
+    }
+  }
+
+  function revealCircle(gs, cx, cy, r, makeVisible=false){
+    const r2 = r*r;
+    for(let dy=-r; dy<=r; dy++){
+      for(let dx=-r; dx<=r; dx++){
+        if(dx*dx + dy*dy > r2) continue;
+        const tx = cx + dx, ty = cy + dy;
+        const key = kTile(tx,ty);
+        gs.discovered.add(key);
+        if(makeVisible) gs.visible.add(key);
+      }
+    }
+  }
+
+  function lineTiles(x0,y0,x1,y1){
+    // Bresenham
+    const tiles = [];
+    let dx = Math.abs(x1-x0), sx = x0 < x1 ? 1 : -1;
+    let dy = -Math.abs(y1-y0), sy = y0 < y1 ? 1 : -1;
+    let err = dx + dy;
+    let x = x0, y = y0;
+    while(true){
+      tiles.push({tx:x, ty:y});
+      if(x===x1 && y===y1) break;
+      const e2 = 2*err;
+      if(e2 >= dy){ err += dy; x += sx; }
+      if(e2 <= dx){ err += dx; y += sy; }
+    }
+    return tiles;
+  }
+
+  /* ========= CAMERA / COORDS ========= */
+  function viewRect(gs){
+    const w = el.canvas.width, h = el.canvas.height;
+    const vw = w / gs.camera.zoom, vh = h / gs.camera.zoom;
+    return {
+      left: gs.camera.x - vw/2,
+      top: gs.camera.y - vh/2,
+      vw, vh,
+      w, h
+    };
+  }
+
+  function screenToWorld(gs, sx, sy){
+    const r = viewRect(gs);
+    return { x: r.left + sx/gs.camera.zoom, y: r.top + sy/gs.camera.zoom };
+  }
+  function worldToScreen(gs, wx, wy){
+    const r = viewRect(gs);
+    return { x: (wx - r.left) * gs.camera.zoom, y: (wy - r.top) * gs.camera.zoom };
+  }
+
+  function zoomAt(gs, mouseSx, mouseSy, zoomMul){
+    const before = screenToWorld(gs, mouseSx, mouseSy);
+    gs.camera.zoom = clamp(gs.camera.zoom * zoomMul, CFG.zoom.min, CFG.zoom.max);
+    const after = screenToWorld(gs, mouseSx, mouseSy);
+    // Mantém o ponto sob o mouse fixo
+    gs.camera.x += (before.x - after.x);
+    gs.camera.y += (before.y - after.y);
+  }
+
+  /* ========= UI RENDER ========= */
+  function refreshUI(gs){
+    // Recursos
+    el.resourcesPanel.innerHTML = `
+      <div class="kv"><span>Turno</span><b>${gs.turn}</b></div>
+      <div class="kv"><span>Madeira</span><b>${gs.resources.wood}</b></div>
+      <div class="kv"><span>Pedra</span><b>${gs.resources.stone}</b></div>
+      <div class="kv"><span>Carne</span><b>${gs.resources.meat}</b></div>
+    `;
+
+    // Seleção
+    const sel = gs.ui.selectedEntityId ? gs.entities.get(gs.ui.selectedEntityId) : null;
+    const terr = gs.territories.get(gs.ui.activeTerrKey);
+    const slot = terr && gs.ui.activeSlotIdx ? terr.slots.find(s => s.idx === gs.ui.activeSlotIdx) : null;
+
+    let selHtml = "";
+    if(sel && sel.type === "building"){
+      const def = BUILDINGS[sel.buildingType];
+      const status = sel.constructed ? "Pronto" : `Construindo (${sel.turnsLeft} turno(s))`;
+      selHtml = `
+        <div class="titleRow"><span>${def.icon} ${def.name}</span><span class="pill">${status}</span></div>
+        <div class="muted">Território: ${sel.Tx},${sel.Ty} • Slot: ${sel.slotIdx}</div>
+      `;
+    }else if(gs.ui.activeSlotIdx){
+      selHtml = `
+        <div class="titleRow"><span>Slot ${gs.ui.activeSlotIdx}</span><span class="pill">${slot && slot.buildingId ? "Ocupado" : "Vazio"}</span></div>
+        <div class="muted">Clique em uma construção ao lado para selecionar e depois clique no slot.</div>
+      `;
+    }else{
+      selHtml = `<div class="muted">Clique no castelo ou em um dos 6 slots para selecionar.</div>`;
+    }
+    el.selectedPanel.innerHTML = selHtml;
+
+    // Build panel
+    const buildables = ["FARM","SMITHY","QUARRY","HOUSE","BARRACKS"];
+    const chosen = gs.ui.buildChoice;
+    const activeSlotEmpty = !!(gs.ui.activeSlotIdx && slot && !slot.buildingId);
+    el.buildPanel.innerHTML = `
+      <div class="muted" style="margin-bottom:10px">
+        ${chosen ? `Selecionado: <b>${BUILDINGS[chosen].name}</b>. Clique em um slot vazio para construir.` : `Selecione uma construção abaixo.`}
+      </div>
+      <div class="gridBuild">
+        ${buildables.map(bt => {
+          const d = BUILDINGS[bt];
+          const affordable = canAfford(gs.resources, d.cost);
+          const disabled = !affordable;
+          const cls = "buildCard" + (chosen===bt ? " active" : "") + (disabled ? " disabled" : "");
+          return `
+            <button class="${cls}" data-build="${bt}" ${disabled ? "disabled" : ""}>
+              <div class="row"><span class="icon">${d.icon}</span><span class="name">${d.name}</span></div>
+              <div class="meta">Custo: ${fmtCost(d.cost)} • Tempo: ${d.turns}t</div>
+              <div class="meta">${d.income ? `Gera/turno: ${fmtIncome(d.income)}` : "&nbsp;"}</div>
+            </button>
+          `;
+        }).join("")}
+      </div>
+      <div style="margin-top:10px; display:flex; gap:8px;">
+        <button class="btn" id="btnCancelBuild" ${chosen ? "" : "disabled"}>Cancelar</button>
+      </div>
+    `;
+
+    // Troops panel (apenas ao selecionar quartel pronto)
+    el.troopsPanel.innerHTML = `<div class="muted">Selecione um <b>Quartel</b> pronto para gerenciar tropas.</div>`;
+    gs.ui.recruitSlotIdx = (sel && sel.type==="building" && sel.buildingType==="BARRACKS") ? gs.ui.recruitSlotIdx : null;
+    gs.ui.moveMode = (sel && sel.type==="building" && sel.buildingType==="BARRACKS") ? gs.ui.moveMode : false;
+
+    if(sel && sel.type==="building" && sel.buildingType==="BARRACKS" && sel.constructed){
+      const cap = calcTroopCapacity(gs, sel);
+      ensureGarrisonCapacity(gs, sel, cap);
+
+      const slotsHtml = sel.garrison.slots.map((unitId, idx) => {
+        const trainingLeft = sel.garrison.training[idx];
+        const unit = unitId ? gs.entities.get(unitId) : null;
+        const isSelected = unitId && gs.ui.moveSelected.has(unitId);
+        const border = gs.ui.moveMode ? (isSelected ? "2px solid #37d67a" : "2px solid rgba(255,255,255,.12)") : "2px solid rgba(255,255,255,.08)";
+        const label = trainingLeft ? `Treinando (${trainingLeft}t)` : (unit ? UNITS[unit.unitType].name : "Vazio");
+        const icon = unit ? UNITS[unit.unitType].icon : (trainingLeft ? "⏳" : "＋");
+        return `
+          <button class="troopSlot" data-troop-slot="${idx}" style="border:${border}">
+            <div class="tIcon">${icon}</div>
+            <div class="tLbl">${label}</div>
+          </button>
+        `;
+      }).join("");
+
+      const recruitUi = (gs.ui.recruitSlotIdx !== null) ? `
+        <div class="recruitBox">
+          <div class="muted" style="margin-bottom:8px">Escolha a unidade para o slot ${gs.ui.recruitSlotIdx+1}:</div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn good" id="btnRecruitWarrior">Produzir ${UNITS.WARRIOR.name} (${UNITS.WARRIOR.cost.meat} carne, ${UNITS.WARRIOR.turns}t)</button>
+            <button class="btn good" id="btnRecruitArcher">Produzir ${UNITS.ARCHER.name} (${UNITS.ARCHER.cost.meat} carne, ${UNITS.ARCHER.turns}t)</button>
+            <button class="btn" id="btnRecruitCancel">Cancelar</button>
+          </div>
+        </div>
+      ` : "";
+
+      const moveUi = `
+        <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="btn ${gs.ui.moveMode ? "good" : ""}" id="btnMoveToggle">${gs.ui.moveMode ? "Modo mover: ON" : "Mover"}</button>
+          ${gs.ui.moveMode ? `<button class="btn good" id="btnMoveConfirm">Confirmar destino</button>` : ""}
+          ${gs.ui.moveMode ? `<button class="btn" id="btnMoveClear">Limpar seleção</button>` : ""}
+        </div>
+        ${gs.ui.moveMode ? `<div class="muted" style="margin-top:6px">Selecione/deselecione tropas nos slots (borda verde). Em seguida, clique no destino no mapa (por enquanto: o ícone de monstros no caminho marrom).</div>` : `<div class="muted" style="margin-top:6px">Capacidade: <b>${cap}</b> (Quartel: 3 + Casas no território: ${countHousesInTerritory(gs, sel.Tx, sel.Ty)}).</div>`}
+      `;
+
+      el.troopsPanel.innerHTML = `
+        <div class="titleRow"><span>🛡️ Tropas do Quartel</span><span class="pill">${cap} slots</span></div>
+        <div class="troopGrid">${slotsHtml}</div>
+        ${moveUi}
+        ${recruitUi}
+      `;
+    }
+
+    // Actions panel
+    el.actionsPanel.innerHTML = `
+      <div class="muted">Ações do turno:</div>
+      <ul style="margin:8px 0 0 18px; padding:0; color:#c8d2de;">
+        <li>Construções e treinamentos avançam ao clicar em <b>Passar Turno</b>.</li>
+        <li>Fazendas, pedreiras e serralherias geram recursos por turno após concluídas.</li>
+      </ul>
+    `;
+
+    // Wire build buttons
+    el.buildPanel.querySelectorAll("[data-build]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        gs.ui.buildChoice = btn.getAttribute("data-build");
+        refreshUI(gs);
+      });
+    });
+    const cancelBtn = el.buildPanel.querySelector("#btnCancelBuild");
+    if(cancelBtn){
+      cancelBtn.addEventListener("click", () => {
+        gs.ui.buildChoice = null;
+        refreshUI(gs);
+      });
+    }
+
+    // Wire troop buttons (if visible)
+    el.troopsPanel.querySelectorAll("[data-troop-slot]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const idx = Number(btn.getAttribute("data-troop-slot"));
+        onTroopSlotClick(gs, idx);
+      });
+    });
+
+    const mvToggle = el.troopsPanel.querySelector("#btnMoveToggle");
+    if(mvToggle){
+      mvToggle.addEventListener("click", () => {
+        toggleMoveMode(gs);
+        refreshUI(gs);
+      });
+    }
+    const mvClear = el.troopsPanel.querySelector("#btnMoveClear");
+    if(mvClear){
+      mvClear.addEventListener("click", () => {
+        gs.ui.moveSelected.clear();
+        refreshUI(gs);
+      });
+    }
+    const mvConfirm = el.troopsPanel.querySelector("#btnMoveConfirm");
+    if(mvConfirm){
+      mvConfirm.addEventListener("click", () => {
+        if(gs.ui.moveSelected.size===0){
+          logLine("Selecione ao menos 1 tropa para mover.");
+          return;
+        }
+        gs.ui.pendingMoveDest = { nodeId: "monster0" };
+        logLine("Agora clique no destino no mapa (ícone de monstros) para confirmar o movimento.");
+      });
+    }
+
+    const rW = el.troopsPanel.querySelector("#btnRecruitWarrior");
+    if(rW){
+      rW.addEventListener("click", () => recruitSelected(gs, "WARRIOR"));
+    }
+    const rA = el.troopsPanel.querySelector("#btnRecruitArcher");
+    if(rA){
+      rA.addEventListener("click", () => recruitSelected(gs, "ARCHER"));
+    }
+    const rC = el.troopsPanel.querySelector("#btnRecruitCancel");
+    if(rC){
+      rC.addEventListener("click", () => {
+        gs.ui.recruitSlotIdx = null;
+        refreshUI(gs);
+      });
+    }
+  }
+
+  function fmtCost(cost){
+    const parts = [];
+    if(cost.wood) parts.push(String(cost.wood) + "🪵");
+    if(cost.stone) parts.push(String(cost.stone) + "🪨");
+    if(cost.meat) parts.push(String(cost.meat) + "🍖");
+    return parts.length ? parts.join(" ") : "—";
+  }
+
+  function fmtIncome(inc){
+    const out = [];
+    for(const k in inc){
+      if(!Object.prototype.hasOwnProperty.call(inc,k)) continue;
+      const icon = (k==="wood") ? "🪵" : (k==="stone") ? "🪨" : "🍖";
+      out.push("+" + inc[k] + icon);
+    }
+    return out.join(" ");
+  }${icon}`;
+    }).join(" ");
+  }
+
+  /* ========= TROOPS LOGIC ========= */
+  function countHousesInTerritory(gs, Tx, Ty){
+    let n = 0;
+    for(const e of gs.entities.values()){
+      if(e.type==="building" && e.constructed && e.owner==="player" && e.Tx===Tx && e.Ty===Ty && e.buildingType==="HOUSE"){
+        n++;
+      }
+    }
+    return n;
+  }
+
+  function calcTroopCapacity(gs, barracks){
+    return 3 + countHousesInTerritory(gs, barracks.Tx, barracks.Ty);
+  }
+
+  function ensureGarrisonCapacity(gs, barracks, cap){
+    const g = barracks.garrison;
+    if(!g) return;
+    if(g.slots.length < cap){
+      while(g.slots.length < cap) g.slots.push(null);
+    }
+    // não reduz capacidade automaticamente (evita “perder” tropas)
+  }
+
+  function onTroopSlotClick(gs, slotIdx){
+    const sel = gs.ui.selectedEntityId ? gs.entities.get(gs.ui.selectedEntityId) : null;
+    if(!sel || sel.type!=="building" || sel.buildingType!=="BARRACKS" || !sel.constructed) return;
+
+    const cap = calcTroopCapacity(gs, sel);
+    ensureGarrisonCapacity(gs, sel, cap);
+
+    const unitId = sel.garrison.slots[slotIdx] || null;
+    const trainingLeft = sel.garrison.training[slotIdx];
+
+    if(gs.ui.moveMode){
+      // Seleção/deseleção de unidades prontas
+      if(unitId){
+        const unit = gs.entities.get(unitId);
+        if(unit && unit.ready && unit.state==="garrison"){
+          if(gs.ui.moveSelected.has(unitId)) gs.ui.moveSelected.delete(unitId);
+          else gs.ui.moveSelected.add(unitId);
+        }
+      }
+      refreshUI(gs);
+      return;
+    }
+
+    if(trainingLeft){
+      logLine("Esta unidade ainda está em treinamento.");
+      return;
+    }
+
+    if(!unitId){
+      gs.ui.recruitSlotIdx = slotIdx;
+      refreshUI(gs);
+      return;
+    }
+
+    // unidade pronta, por enquanto apenas informa
+    const unit = gs.entities.get(unitId);
+    logLine(`Unidade selecionada: ${UNITS[unit.unitType].name}. (Movimento e combate serão adicionados na próxima etapa.)`);
+  }
+
+  function recruitSelected(gs, unitType){
+    const sel = gs.ui.selectedEntityId ? gs.entities.get(gs.ui.selectedEntityId) : null;
+    if(!sel || sel.type!=="building" || sel.buildingType!=="BARRACKS" || !sel.constructed) return;
+
+    const idx = gs.ui.recruitSlotIdx;
+    if(idx===null || idx===undefined) return;
+
+    const def = UNITS[unitType];
+    if(!canAfford(gs.resources, def.cost)){
+      logLine("Recursos insuficientes para produzir esta unidade.");
+      return;
+    }
+    if(sel.garrison.slots[idx]){
+      logLine("Este slot já está ocupado.");
+      return;
+    }
+
+    pay(gs.resources, def.cost);
+    sel.garrison.training[idx] = def.turns;
+
+    const bp = buildingWorldPos(gs, sel);
+    const tileX = Math.round(bp.x / CFG.tile);
+    const tileY = Math.round(bp.y / CFG.tile);
+    const unit = spawnUnit(gs, unitType, tileX, tileY, sel.id);
+    unit.ready = false;
+    unit.turnsLeft = def.turns;
+    sel.garrison.slots[idx] = unit.id;
+
+    gs.ui.recruitSlotIdx = null;
+    logLine(`Produção iniciada: ${def.name} (conclui em ${def.turns} turno).`);
+    refreshUI(gs);
+  }
+
+  function toggleMoveMode(gs){
+    const sel = gs.ui.selectedEntityId ? gs.entities.get(gs.ui.selectedEntityId) : null;
+    if(!sel || sel.type!=="building" || sel.buildingType!=="BARRACKS" || !sel.constructed){
+      gs.ui.moveMode = false;
+      gs.ui.moveSelected.clear();
+      return;
+    }
+    gs.ui.moveMode = !gs.ui.moveMode;
+    gs.ui.pendingMoveDest = null;
+    gs.ui.moveSelected.clear();
+
+    if(gs.ui.moveMode){
+      // Seleciona automaticamente tropas prontas
+      sel.garrison.slots.forEach(unitId => {
+        if(!unitId) return;
+        const u = gs.entities.get(unitId);
+        if(u && u.ready && u.state==="garrison") gs.ui.moveSelected.add(unitId);
+      });
+      logLine("Modo mover ativado: tropas prontas selecionadas (borda verde).");
+    }else{
+      logLine("Modo mover desativado.");
+    }
+  }
+
+  /* ========= BUILD / TURN ========= */
+  function tryBuildOnActiveSlot(gs){
+    const terr = gs.territories.get(gs.ui.activeTerrKey);
+    if(!terr || !gs.ui.activeSlotIdx) return;
+    const slot = terr.slots.find(s => s.idx === gs.ui.activeSlotIdx);
+    if(!slot || slot.buildingId) return;
+    if(!gs.ui.buildChoice) return;
+
+    const bt = gs.ui.buildChoice;
+    const def = BUILDINGS[bt];
+    if(!canAfford(gs.resources, def.cost)){
+      logLine("Recursos insuficientes para essa construção.");
+      return;
+    }
+
+    pay(gs.resources, def.cost);
+    const b = spawnBuilding(gs, bt, terr.Tx, terr.Ty, slot.idx);
+    logLine(`Construção iniciada: ${def.name} (${def.turns} turno(s)).`);
+    gs.ui.selectedEntityId = b.id;
+    gs.ui.buildChoice = null;
+    refreshUI(gs);
+  }
+
+  function endTurn(gs){
+    // 1) Avança construções
+    for(const e of gs.entities.values()){
+      if(e.type==="building" && !e.constructed){
+        e.turnsLeft = Math.max(0, e.turnsLeft - 1);
+        if(e.turnsLeft === 0){
+          e.constructed = true;
+          const def = BUILDINGS[e.buildingType];
+          logLine(`Construção concluída: ${def.name}.`);
+          if(e.buildingType==="BARRACKS" && e.garrison){
+            // inicializa capacidade
+            ensureGarrisonCapacity(gs, e, calcTroopCapacity(gs, e));
+          }
+        }
+      }
+    }
+
+    // 2) Renda por turno
+    for(const e of gs.entities.values()){
+      if(e.type==="building" && e.constructed){
+        const inc = BUILDINGS[e.buildingType].income;
+        if(inc){
+          for(const [k,v] of Object.entries(inc)){
+            gs.resources[k] = (gs.resources[k]||0) + v;
+          }
+        }
+      }
+    }
+
+    // 3) Treinamento de unidades
+    for(const e of gs.entities.values()){
+      if(e.type==="unit" && !e.ready){
+        e.turnsLeft = Math.max(0, e.turnsLeft - 1);
+        if(e.turnsLeft === 0){
+          e.ready = true;
+          logLine(`Unidade pronta: ${UNITS[e.unitType].name}.`);
+        }
+      }
+    }
+    // mantém o contador no garrison para UI
+    for(const b of gs.entities.values()){
+      if(b.type==="building" && b.buildingType==="BARRACKS" && b.garrison){
+        for(const idx of Object.keys(b.garrison.training)){
+          b.garrison.training[idx] = Math.max(0, b.garrison.training[idx] - 1);
+          if(b.garrison.training[idx] === 0) delete b.garrison.training[idx];
+        }
+      }
+    }
+
+    // 4) Movimentos (MVP: apenas caminho até monster0)
+    if(gs.actions.moves.length){
+      for(const mv of gs.actions.moves){
+        mv.turnsLeft = Math.max(0, mv.turnsLeft - 1);
+        if(mv.turnsLeft === 0){
+          // chega
+          const dest = mv.to;
+          for(const uid of mv.unitIds){
+            const u = gs.entities.get(uid);
+            if(!u) continue;
+            u.state = "field";
+            u.tileX = dest.tileX;
+            u.tileY = dest.tileY;
+          }
+          mv.done = true;
+          logLine("Tropas chegaram ao destino. (Combate será a próxima etapa.)");
+        }
+      }
+      gs.actions.moves = gs.actions.moves.filter(x => !x.done);
+    }
+
+    gs.turn += 1;
+    refreshVisibility(gs, false);
+    refreshUI(gs);
+  }
+
+  /* ========= INPUT ========= */
+  function pickSlotAt(gs, wx, wy){
+    const base = gs.entities.get(gs.baseId);
+    const basePos = buildingWorldPos(gs, base);
+
+    // Clique no castelo
+    const castleSize = 22;
+    if(Math.abs(wx - basePos.x) <= castleSize/2 && Math.abs(wy - basePos.y) <= castleSize/2){
+      return { slotIdx: 0 };
+    }
+
+    // Clique nos slots
+    const sSize = CFG.slot.size;
+    for(const s of CFG.slot.ring){
+      const sx = basePos.x + s.dx;
+      const sy = basePos.y + s.dy;
+      if(Math.abs(wx - sx) <= sSize/2 && Math.abs(wy - sy) <= sSize/2){
+        return { slotIdx: s.idx };
+      }
+    }
+    return null;
+  }
+
+  function pickMonsterNodeAt(gs, wx, wy){
+    const m = gs.nodes.monster0;
+    const px = m.tileX * CFG.tile;
+    const py = m.tileY * CFG.tile;
+    const r = 14;
+    if((wx-px)*(wx-px) + (wy-py)*(wy-py) <= r*r){
+      return { nodeId: "monster0", tileX: m.tileX, tileY: m.tileY };
+    }
+    return null;
+  }
+
+  function onCanvasClick(e){
+    if(!GAME || !GAME.running) return;
+
+    const rect = el.canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    const w = screenToWorld(GAME, sx, sy);
+
+    // Se estiver aguardando destino do mover
+    if(GAME.ui.pendingMoveDest){
+      const hit = pickMonsterNodeAt(GAME, w.x, w.y);
+      if(hit){
+        scheduleMoveToNode(GAME, hit);
+        GAME.ui.pendingMoveDest = null;
+        refreshUI(GAME);
+        return;
+      }
+    }
+
+    // Slots / castelo
+    const hitSlot = pickSlotAt(GAME, w.x, w.y);
+    if(hitSlot){
+      GAME.ui.activeSlotIdx = hitSlot.slotIdx;
+      GAME.ui.activeTerrKey = kTerr(0,0);
+
+      if(hitSlot.slotIdx === 0){
+        // seleciona base
+        GAME.ui.selectedEntityId = GAME.baseId;
+      }else{
+        const terr = GAME.territories.get(GAME.ui.activeTerrKey);
+        const slot = terr.slots.find(s => s.idx === hitSlot.slotIdx);
+        GAME.ui.selectedEntityId = slot && slot.buildingId ? slot.buildingId : null;
+      }
+
+      // Se houver construção selecionada, tenta construir
+      if(GAME.ui.buildChoice && hitSlot.slotIdx !== 0){
+        tryBuildOnActiveSlot(GAME);
+      }else{
+        refreshUI(GAME);
+      }
+      return;
+    }
+
+    // Clique fora: cancela seleção de slot (mantém building selection)
+    GAME.ui.activeSlotIdx = null;
+    refreshUI(GAME);
+  }
+
+  function scheduleMoveToNode(gs, nodeHit){
+    const sel = gs.ui.selectedEntityId ? gs.entities.get(gs.ui.selectedEntityId) : null;
+    if(!sel || sel.type!=="building" || sel.buildingType!=="BARRACKS" || !sel.constructed){
+      logLine("Selecione um Quartel para mover tropas.");
+      return;
+    }
+
+    const unitIds = [...gs.ui.moveSelected];
+    if(!unitIds.length){
+      logLine("Nenhuma tropa selecionada.");
+      return;
+    }
+
+    // Define tempo como 1 turno (MVP) ou pela distância em tiles / 16
+    const bp = buildingWorldPos(gs, sel);
+    const fromTileX = Math.round(bp.x / CFG.tile);
+    const fromTileY = Math.round(bp.y / CFG.tile);
+    const distTiles = Math.abs(nodeHit.tileX - fromTileX) + Math.abs(nodeHit.tileY - fromTileY);
+    const turns = Math.max(1, Math.round(distTiles / CFG.terrTiles));
+
+    // Marca unidades como em movimento
+    for(const uid of unitIds){
+      const u = gs.entities.get(uid);
+      if(!u || !u.ready || u.state!=="garrison") continue;
+      u.state = "moving";
+    }
+
+    gs.actions.moves.push({
+      unitIds,
+      to: { tileX: nodeHit.tileX, tileY: nodeHit.tileY, nodeId: nodeHit.nodeId },
+      turnsLeft: turns
+    });
+
+    gs.ui.moveMode = false;
+    gs.ui.moveSelected.clear();
+
+    logLine(`Movimento iniciado: ${unitIds.length} unidade(s) • ETA: ${turns} turno(s).`);
+  }
+
+  /* ========= DRAW ========= */
+  function terrainColor(gs, tx, ty){
+    // caminho: marrom
+    const baseC = territoryCenterTile(0,0);
+    const m = gs.nodes.monster0;
+    const onPath = isOnPath(baseC.tx, baseC.ty, m.tileX, m.tileY, tx, ty);
+    if(onPath) return "#7b5a3a";
+
+    const h = hash2(tx,ty,gs.seed32);
+    const r = h % 1000;
+    if(r < 30) return "#2c7a2c";       // floresta
+    if(r < 45) return "#2f8a2f";
+    if(r < 70) return "#3b8f3b";       // grama escura
+    if(r < 85) return "#3d9c3d";
+    if(r < 95) return "#4caa4c";       // grama clara
+    return "#3f9740";
+  }
+
+  function isOnPath(x0,y0,x1,y1,tx,ty){
+    // aproximação: usa a própria linha Bresenham e confere
+    // (cache simples por frame seria melhor, mas suficiente para MVP)
+    // Para reduzir custo, considera apenas tiles dentro do bounding box
+    const minx = Math.min(x0,x1), maxx = Math.max(x0,x1);
+    const miny = Math.min(y0,y1), maxy = Math.max(y0,y1);
+    if(tx<minx-1 || tx>maxx+1 || ty<miny-1 || ty>maxy+1) return false;
+    const pts = lineTiles(x0,y0,x1,y1);
+    for(let i=0;i<pts.length;i++){
+      const p = pts[i];
+      if(p.tx===tx && p.ty===ty) return true;
+    }
+    return false;
+  }
+
+  function draw(gs){
+    const ctx = el.ctx;
+    const r = viewRect(gs);
+    ctx.clearRect(0,0,r.w,r.h);
+
+    // tiles visíveis na tela
+    const t0x = Math.floor(r.left / CFG.tile) - 2;
+    const t0y = Math.floor(r.top  / CFG.tile) - 2;
+    const t1x = Math.floor((r.left + r.vw) / CFG.tile) + 2;
+    const t1y = Math.floor((r.top  + r.vh) / CFG.tile) + 2;
+
+    for(let ty=t0y; ty<=t1y; ty++){
+      for(let tx=t0x; tx<=t1x; tx++){
+        const wx = tx * CFG.tile;
+        const wy = ty * CFG.tile;
+        const sc = worldToScreen(gs, wx, wy);
+
+        const key = kTile(tx,ty);
+        const isDiscovered = gs.discovered.has(key);
+        const isVisible = gs.visible.has(key);
+
+        if(!isDiscovered){
+          // desconhecido: cinza
+          ctx.fillStyle = "#6c717a";
+          ctx.fillRect(sc.x, sc.y, CFG.tile*gs.camera.zoom, CFG.tile*gs.camera.zoom);
+          continue;
+        }
+
+        // terreno
+        ctx.fillStyle = terrainColor(gs, tx, ty);
+        ctx.fillRect(sc.x, sc.y, CFG.tile*gs.camera.zoom, CFG.tile*gs.camera.zoom);
+
+        if(!isVisible){
+          ctx.fillStyle = "rgba(40,44,52,0.55)";
+          ctx.fillRect(sc.x, sc.y, CFG.tile*gs.camera.zoom, CFG.tile*gs.camera.zoom);
+        }
+      }
+    }
+
+    // Nó de monstros
+    const m = gs.nodes.monster0;
+    const mpx = m.tileX * CFG.tile;
+    const mpy = m.tileY * CFG.tile;
+    const ms = worldToScreen(gs, mpx, mpy);
+    if(gs.discovered.has(kTile(m.tileX,m.tileY))){
+      ctx.save();
+      ctx.translate(ms.x, ms.y);
+      ctx.scale(gs.camera.zoom, gs.camera.zoom);
+      ctx.beginPath();
+      ctx.arc(0,0, 10, 0, Math.PI*2);
+      ctx.fillStyle = m.alive ? "#7a1313" : "#334";
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "rgba(255,255,255,0.35)";
+      ctx.stroke();
+      ctx.fillStyle = "#fff";
+      ctx.font = "10px system-ui";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(m.alive ? "M" : "✓", 0, 0);
+      ctx.restore();
+    }
+
+    // Base e slots
+    drawBaseAndSlots(gs);
+
+    // Unidades em campo / movimento (apenas indicador simples)
+    for(const e of gs.entities.values()){
+      if(e.type!=="unit") continue;
+      if(e.state==="garrison") continue;
+      const wx = e.tileX * CFG.tile;
+      const wy = e.tileY * CFG.tile;
+      const p = worldToScreen(gs, wx, wy);
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.scale(gs.camera.zoom, gs.camera.zoom);
+      ctx.fillStyle = (e.state==="moving") ? "#f5c84c" : "#37d67a";
+      ctx.fillRect(-4,-4,8,8);
+      ctx.restore();
+    }
+
+    // Destaque do slot ativo
+    if(gs.ui.activeSlotIdx){
+      const base = gs.entities.get(gs.baseId);
+      const basePos = buildingWorldPos(gs, base);
+      if(gs.ui.activeSlotIdx === 0){
+        drawHighlightRect(gs, basePos.x, basePos.y, 24, "rgba(255,255,255,0.75)");
+      }else{
+        const ring = CFG.slot.ring.find(s => s.idx === gs.ui.activeSlotIdx);
+        drawHighlightRect(gs, basePos.x + ring.dx, basePos.y + ring.dy, CFG.slot.size+6, "rgba(255,255,255,0.55)");
+      }
+    }
+  }
+
+  function drawHighlightRect(gs, wx, wy, size, stroke){
+    const ctx = el.ctx;
+    const p = worldToScreen(gs, wx - size/2, wy - size/2);
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(p.x, p.y, size*gs.camera.zoom, size*gs.camera.zoom);
+  }
+
+  function drawBaseAndSlots(gs){
+    const ctx = el.ctx;
+    const base = gs.entities.get(gs.baseId);
+    const bp = buildingWorldPos(gs, base);
+    const bps = worldToScreen(gs, bp.x, bp.y);
+
+    // Castelo: quadrado cinza
+    ctx.save();
+    ctx.translate(bps.x, bps.y);
+    ctx.scale(gs.camera.zoom, gs.camera.zoom);
+
+    const castle = 22;
+    ctx.fillStyle = "#9aa2ad";
+    ctx.fillRect(-castle/2, -castle/2, castle, castle);
+    ctx.strokeStyle = "rgba(20,26,34,0.8)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(-castle/2, -castle/2, castle, castle);
+
+    // “dentes” no topo
+    ctx.fillStyle = "#b2bac6";
+    for(let i=-8;i<=8;i+=8){
+      ctx.fillRect(i-2, -castle/2-3, 4, 5);
+    }
+
+    ctx.restore();
+
+    // Slots ao redor
+    const terr = gs.territories.get(kTerr(0,0));
+    for(const s of CFG.slot.ring){
+      const sx = bp.x + s.dx;
+      const sy = bp.y + s.dy;
+      const sp = worldToScreen(gs, sx, sy);
+
+      ctx.save();
+      ctx.translate(sp.x, sp.y);
+      ctx.scale(gs.camera.zoom, gs.camera.zoom);
+
+      // slot “transparente” com contorno
+      const size = CFG.slot.size;
+      ctx.fillStyle = "rgba(255,255,255,0.12)";
+      ctx.fillRect(-size/2, -size/2, size, size);
+      ctx.strokeStyle = "rgba(255,255,255,0.20)";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(-size/2, -size/2, size, size);
+
+      // Se há construção, desenha ícone
+      const slot = terr.slots.find(x => x.idx === s.idx);
+      if(slot && slot.buildingId){
+        const b = gs.entities.get(slot.buildingId);
+        const def = BUILDINGS[b.buildingType];
+
+        ctx.fillStyle = "rgba(10,12,16,0.55)";
+        ctx.fillRect(-size/2+1, -size/2+1, size-2, size-2);
+
+        ctx.fillStyle = "#fff";
+        ctx.font = "12px system-ui";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(def.icon, 0, -1);
+
+        if(!b.constructed){
+          ctx.fillStyle = "rgba(0,0,0,0.65)";
+          ctx.fillRect(-size/2, -size/2, size, size);
+          ctx.fillStyle = "#fff";
+          ctx.font = "9px system-ui";
+          ctx.fillText(`${b.turnsLeft}t`, 0, 6);
+        }
+      }
+      ctx.restore();
+    }
+  }
+
+  /* ========= SAVE / LOAD ========= */
+  function serializeGame(gs){
+    const entities = [...gs.entities.values()];
+    return JSON.stringify({
+      version: gs.version,
+      seed: gs.seed,
+      seed32: gs.seed32,
+      running: gs.running,
+      turn: gs.turn,
+      camera: gs.camera,
+      resources: gs.resources,
+      nextId: gs.nextId,
+      baseId: gs.baseId,
+      nodes: gs.nodes,
+      territories: [...gs.territories.values()],
+      entities,
+      discovered: [...gs.discovered],
+      visible: [...gs.visible],
+      ui: {
+        activeTerrKey: gs.ui.activeTerrKey,
+        activeSlotIdx: gs.ui.activeSlotIdx,
+        selectedEntityId: gs.ui.selectedEntityId
+      },
+      actions: gs.actions
+    });
+  }
+
+  function deserializeGame(str){
+    const raw = JSON.parse(str);
+    const gs = makeGame(raw.seed || "demo");
+    gs.turn = raw.turn || 1;
+    gs.camera = raw.camera || gs.camera;
+    gs.resources = raw.resources || gs.resources;
+    gs.nextId = raw.nextId || gs.nextId;
+    gs.baseId = raw.baseId || gs.baseId;
+    gs.nodes = raw.nodes || gs.nodes;
+
+    gs.territories = new Map();
+    (raw.territories || []).forEach(t => {
+      gs.territories.set(kTerr(t.Tx,t.Ty), t);
+    });
+
+    gs.entities = new Map();
+    (raw.entities || []).forEach(e => {
+      gs.entities.set(e.id, e);
+    });
+
+    gs.discovered = new Set(raw.discovered || []);
+    gs.visible = new Set(raw.visible || []);
+
+    gs.actions = raw.actions || { moves: [] };
+
+    gs.ui.activeTerrKey = (raw.ui && raw.ui.activeTerrKey) || kTerr(0,0);
+    gs.ui.activeSlotIdx = (raw.ui && raw.ui.activeSlotIdx) || null;
+    gs.ui.selectedEntityId = (raw.ui && raw.ui.selectedEntityId) || null;
+    gs.ui.buildChoice = null;
+    gs.ui.recruitSlotIdx = null;
+    gs.ui.moveMode = false;
+    gs.ui.moveSelected = new Set();
+    gs.ui.pendingMoveDest = null;
+
+    refreshVisibility(gs, false);
+    return gs;
+  }
+
+  function saveGame(gs){
+    localStorage.setItem("kingdom_turnos_save_v5", serializeGame(gs));
+    logLine("Jogo salvo.");
+  }
+  function loadGame(){
+    const s = localStorage.getItem("kingdom_turnos_save_v5") || localStorage.getItem("kingdom_turnos_save_v3");
+    if(!s){
+      logLine("Nenhum save encontrado.");
+      return null;
+    }
+    logLine("Jogo carregado.");
+    return deserializeGame(s);
+  }
+
+  /* ========= MENU / FLOW ========= */
+  function showMenu(){
+    el.menuOverlay.style.display = "flex";
+  }
+  function hideMenu(){
+    el.menuOverlay.style.display = "none";
+  }
+
+  function startNew(){
+    GAME = makeGame(el.seedInput.value);
+    GAME.running = true;
+    hideMenu();
+    refreshUI(GAME);
+    logLine(`Novo jogo iniciado. Seed: <b>${GAME.seed}</b>.`);
+  }
+
+  function continueFromSave(){
+    const loaded = loadGame();
+    if(!loaded) return;
+    GAME = loaded;
+    GAME.running = true;
+    hideMenu();
+    refreshUI(GAME);
+  }
+
+  /* ========= EVENTS ========= */
+  function resize(){
+    const wrapper = document.getElementById("canvasWrap");
+    const rect = wrapper.getBoundingClientRect();
+    el.canvas.width = Math.max(640, Math.floor(rect.width));
+    el.canvas.height = Math.max(480, Math.floor(rect.height));
+  }
+  window.addEventListener("resize", () => resize());
+
+  // Click
+  el.canvas.addEventListener("click", onCanvasClick);
+
+  // Pan (drag)
+  el.canvas.addEventListener("mousedown", (e) => {
+    if(!GAME || !GAME.running) return;
+    // só pan se for botão direito ou clique em área vazia (não slot)
+    if(e.button !== 0 && e.button !== 2) return;
+
+    const rect = el.canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    const w = screenToWorld(GAME, sx, sy);
+    const hitSlot = pickSlotAt(GAME, w.x, w.y);
+    if(e.button === 0 && hitSlot) return;
+
+    GAME.ui.dragging = true;
+    GAME.ui.dragStart = { sx, sy, camX: GAME.camera.x, camY: GAME.camera.y };
+  });
+  window.addEventListener("mouseup", () => {
+    if(!GAME) return;
+    GAME.ui.dragging = false;
+    GAME.ui.dragStart = null;
+  });
+  window.addEventListener("mousemove", (e) => {
+    if(!GAME || !GAME.running || !GAME.ui.dragging || !GAME.ui.dragStart) return;
+    const rect = el.canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    const dx = (sx - GAME.ui.dragStart.sx) / GAME.camera.zoom;
+    const dy = (sy - GAME.ui.dragStart.sy) / GAME.camera.zoom;
+    GAME.camera.x = GAME.ui.dragStart.camX - dx;
+    GAME.camera.y = GAME.ui.dragStart.camY - dy;
+  });
+  el.canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+  // Zoom (wheel)
+  el.canvas.addEventListener("wheel", (e) => {
+    if(!GAME || !GAME.running) return;
+    e.preventDefault();
+    const rect = el.canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    const mul = (e.deltaY > 0) ? (1/CFG.zoom.step) : CFG.zoom.step;
+    zoomAt(GAME, sx, sy, mul);
+  }, { passive:false });
+
+  // Buttons
+  el.btnNew.addEventListener("click", startNew);
+  el.btnContinue.addEventListener("click", continueFromSave);
+  el.btnEndTurn.addEventListener("click", () => {
+    if(!GAME || !GAME.running) return;
+    endTurn(GAME);
+  });
+  el.btnSave.addEventListener("click", () => {
+    if(!GAME) return;
+    saveGame(GAME);
+  });
+  el.btnLoad.addEventListener("click", () => {
+    const loaded = loadGame();
+    if(!loaded) return;
+    GAME = loaded;
+    GAME.running = true;
+    hideMenu();
+    refreshUI(GAME);
+  });
+  el.btnHelp.addEventListener("click", () => {
+    alert(
+      "Controles (MVP):
+" +
+      "- Clique no castelo ou nos 6 slots para selecionar.
+" +
+      "- Escolha uma construção e clique num slot vazio para construir.
+" +
+      "- Passar Turno avança construções/treinos e gera recursos.
+" +
+      "- Mouse wheel: zoom.
+" +
+      "- Arraste (clique e segure em área vazia) para mover a câmera.
+" +
+      "- Selecione um Quartel pronto para gerenciar tropas."
+    );
+  });
+
+  /* ========= LOOP ========= */
+  let last = now();
+  function frame(){
+    const t = now();
+    const dt = Math.min(0.05, (t-last)/1000);
+    last = t;
+
+    if(GAME){
+      draw(GAME);
+    }
+    requestAnimationFrame(frame);
+  }
+
+  // BOOT
+  resize();
+  GAME = makeGame("demo");
+  refreshUI(GAME);
+  showMenu();
+  requestAnimationFrame(frame);
+})();
+</script>
+
+</body>
+</html>
