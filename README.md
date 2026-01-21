@@ -1,2 +1,0 @@
-# Estrat-gia-RTS
-Jogo
