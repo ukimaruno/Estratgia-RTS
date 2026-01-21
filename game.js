@@ -615,45 +615,40 @@ function startNewGame() {
 
 /* ----------------- Render ----------------- */
 function drawBackground(rw, rh) {
-  // Grama visível (verde claro)
-  ctx.save();
-
-  ctx.fillStyle = "#7ecb73"; // verde claro (base)
+  // Grama clara (para o “círculo de visão” parecer verde, não preto)
+  ctx.fillStyle = "#4fa84a";
   ctx.fillRect(0, 0, rw, rh);
 
-  // Textura suave para não ficar chapado
+  // Textura suave (variação de tons para ficar menos “chapado”)
   ctx.globalAlpha = 0.10;
-  for (let i = 0; i < 140; i++) {
-    const x = (i * 97) % rw;
-    const y = (i * 53) % rh;
-    ctx.fillStyle = (i % 2 === 0) ? "#6fbe66" : "#89d27e";
-    ctx.fillRect(x, y, 16, 12);
+  for (let i = 0; i < 220; i++) {
+    const x = (i * 73) % rw;
+    const y = (i * 41) % rh;
+    ctx.fillStyle = (i % 2 === 0) ? "#459a40" : "#5bb556";
+    ctx.fillRect(x, y, 18, 12);
   }
-
-  ctx.restore();
+  ctx.globalAlpha = 1;
 }
 
 function drawFog(rw, rh) {
-  // Névoa (cinza) que NÃO acumula: redesenha a cada frame e recorta visão.
+  // Névoa uniforme (cinza) + “recorte” suave (sem anel duro)
   ctx.save();
 
-  // 1) Garante modo normal antes de pintar a névoa
+  // 1) pinta tudo de cinza (área não explorada)
   ctx.globalCompositeOperation = "source-over";
-
-  // Cinza mais “presente” para parecer névoa (não mistura demais com o verde)
-  ctx.fillStyle = "rgba(160, 160, 160, 0.88)";
+  ctx.fillStyle = "rgba(170,170,170,0.80)";
   ctx.fillRect(0, 0, rw, rh);
 
-  // 2) Recorta as áreas visíveis
+  // 2) abre buracos na névoa (áreas exploradas/visíveis)
   ctx.globalCompositeOperation = "destination-out";
 
   const base = nodeById(state.world.baseNodeId);
   const sources = [];
 
-  // base sempre visível
+  // base sempre revela
   sources.push({ x: base.x, y: base.y, radius: CFG.fog.baseVision });
 
-  // territórios dominados expandem visão
+  // territórios dominados também revelam
   for (const n of state.world.nodes.values()) {
     if (n.kind === "OWNED") {
       sources.push({ x: n.x, y: n.y, radius: CFG.fog.territoryVision });
@@ -662,8 +657,17 @@ function drawFog(rw, rh) {
 
   for (const s of sources) {
     const p = worldToScreen(s.x, s.y);
+    const R = s.radius * state.camera.zoom;
+
+    // Gradiente radial: centro totalmente “aberto”, borda suavizada
+    const g = ctx.createRadialGradient(p.x, p.y, R * 0.70, p.x, p.y, R);
+    g.addColorStop(0.00, "rgba(0,0,0,1)");
+    g.addColorStop(0.90, "rgba(0,0,0,1)");
+    g.addColorStop(1.00, "rgba(0,0,0,0)");
+
+    ctx.fillStyle = g;
     ctx.beginPath();
-    ctx.arc(p.x, p.y, s.radius * state.camera.zoom, 0, Math.PI * 2);
+    ctx.arc(p.x, p.y, R, 0, Math.PI * 2);
     ctx.fill();
   }
 
