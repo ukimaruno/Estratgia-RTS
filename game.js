@@ -615,31 +615,42 @@ function startNewGame() {
 
 /* ----------------- Render ----------------- */
 function drawBackground(rw, rh) {
-  ctx.fillStyle = "#2a3a2a";
+  // Grama visível (verde claro)
+  ctx.save();
+
+  ctx.fillStyle = "#7ecb73"; // verde claro (base)
   ctx.fillRect(0, 0, rw, rh);
 
-  ctx.globalAlpha = 0.12;
-  for (let i = 0; i < 120; i++) {
+  // Textura suave para não ficar chapado
+  ctx.globalAlpha = 0.10;
+  for (let i = 0; i < 140; i++) {
     const x = (i * 97) % rw;
     const y = (i * 53) % rh;
-    ctx.fillStyle = (i % 2 === 0) ? "#213321" : "#2f422f";
-    ctx.fillRect(x, y, 14, 10);
+    ctx.fillStyle = (i % 2 === 0) ? "#6fbe66" : "#89d27e";
+    ctx.fillRect(x, y, 16, 12);
   }
-  ctx.globalAlpha = 1;
+
+  ctx.restore();
 }
 
 function drawFog(rw, rh) {
-  // fog cinza e “recortes” de visão em volta da base e de territórios dominados
+  // Névoa (cinza) que NÃO acumula: redesenha a cada frame e recorta visão.
   ctx.save();
-  ctx.fillStyle = "rgba(120,120,120,0.55)";
+
+  // 1) Garante modo normal antes de pintar a névoa
+  ctx.globalCompositeOperation = "source-over";
+
+  // Cinza mais “presente” para parecer névoa (não mistura demais com o verde)
+  ctx.fillStyle = "rgba(160, 160, 160, 0.88)";
   ctx.fillRect(0, 0, rw, rh);
 
+  // 2) Recorta as áreas visíveis
   ctx.globalCompositeOperation = "destination-out";
 
   const base = nodeById(state.world.baseNodeId);
   const sources = [];
 
-  // base sempre
+  // base sempre visível
   sources.push({ x: base.x, y: base.y, radius: CFG.fog.baseVision });
 
   // territórios dominados expandem visão
