@@ -3,28 +3,40 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Kingdom (Turnos) — MVP</title>
+  <title>Estratégia (Turnos) — MVP</title>
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
   <div id="root">
+
     <div id="topbar">
-      <div class="pill"><b id="resWood">0</b><span>Madeira</span></div>
-      <div class="pill"><b id="resStone">0</b><span>Pedra</span></div>
-      <div class="pill"><b id="resMeat">0</b><span>Carne</span></div>
+      <div class="pill"><span class="dot wood"></span><b id="resWood">0</b><span>Madeira</span></div>
+      <div class="pill"><span class="dot stone"></span><b id="resStone">0</b><span>Pedra</span></div>
+      <div class="pill"><span class="dot meat"></span><b id="resMeat">0</b><span>Carne</span></div>
+      <div class="pill"><span class="dot turn"></span><span>Turno</span><b id="turnNow">1</b></div>
 
       <div style="margin-left:auto; display:flex; gap:8px;">
-        <button class="btn" id="btnEndTurn">Passar Turno</button>
+        <button class="btn primary" id="btnEndTurn">Passar Turno</button>
         <button class="btn bad" id="btnMenu">Menu</button>
       </div>
     </div>
 
     <div id="leftPanel">
       <div class="sectionTitle">Seleção</div>
-      <div id="selectionInfo" class="card small muted">Nada selecionado.</div>
+      <div id="selectionInfo" class="card small muted">Clique na base para ver os 6 slots.</div>
 
       <div class="sectionTitle">Construção</div>
-      <div id="buildPanel" class="card small muted">Selecione a base para construir.</div>
+      <div id="buildPanel" class="card small muted">Selecione um slot para construir.</div>
+
+      <div class="sectionTitle">Log</div>
+      <div id="log" class="card small log"></div>
+
+      <div class="sectionTitle">Controles</div>
+      <div class="card small muted">
+        Scroll do mouse: zoom.<br/>
+        Arrastar com botão direito: mover a câmera.<br/>
+        Clique esquerdo: selecionar base/slot.
+      </div>
     </div>
 
     <div id="gameWrap">
@@ -33,14 +45,20 @@
 
     <div id="menuOverlay">
       <div id="menuCard">
-        <h1>Kingdom (Turnos) — MVP</h1>
-        <p>Construa no castelo, gere recursos por turno e avance.</p>
+        <h1>Estratégia (Turnos) — MVP</h1>
+        <p>
+          Você começa apenas com o castelo e 6 slots de construção.
+          Construa Fazenda, Serralheria e Pedreira e passe turnos para gerar recursos.
+        </p>
         <button class="btn primary wide" id="btnNew">Novo Jogo</button>
+        <div class="hint">
+          Dica: construções básicas levam 1 turno para concluir.
+        </div>
       </div>
     </div>
+
   </div>
 
   <script type="module" src="./game.js"></script>
 </body>
 </html>
-
