@@ -1,9 +1,6 @@
 /* Estratégia (Turnos) — MVP
-   Marco 1:
-   - Base/castelo + 6 slots
-   - Construções por turno + produção por turno
-   - Fog cinza e mapa verde
-   - Zoom no scroll + pan arrastando com botão direito
+   Ajuste: mapa procedural (grafo de nós/caminhos) + fog expandindo por territórios dominados.
+   Nota: como ainda não há tropas/batalha, monstro é derrotado via botão "Atacar (debug)" ao selecionar um nó de monstro.
 */
 
 const canvas = document.getElementById("game");
@@ -25,21 +22,74 @@ const el = {
 
 const CFG = {
   zoom: { min: 0.6, max: 2.2, step: 1.10 },
-  fog: { baseVision: 260 }, // raio (mundo) visível no início
-  base: { size: 26 },       // castelo (quadrado)
-  slot: { size: 18, radius: 44 }, // slots ao redor do castelo
-  startResources: { wood: 200, stone: 120, meat: 120 }, // suficiente p/ 1 fazenda + 1 serralheria + 1 pedreira
+  fog: {
+    baseVision: 260,      // visão inicial (base)
+    territoryVision: 230, // visão ao redor de cada território dominado
+  },
+  base: { size: 26 },
+  slot: { size: 18, radius: 44 },
+  startResources: { wood: 200, stone: 120, meat: 120 },
   buildings: {
     FARM:     { name: "Fazenda",     cost: { wood: 50, stone: 10, meat: 0 }, buildTurns: 1, prod: { meat: 30 }, icon: "🌾" },
     LUMBER:   { name: "Serralheria", cost: { wood: 60, stone: 0,  meat: 0 }, buildTurns: 1, prod: { wood: 25 }, icon: "🪵" },
     QUARRY:   { name: "Pedreira",    cost: { wood: 40, stone: 40, meat: 0 }, buildTurns: 1, prod: { stone: 20 }, icon: "🪨" },
     HOUSE:    { name: "Casa",        cost: { wood: 70, stone: 0,  meat: 0 }, buildTurns: 1, prod: null,         icon: "🏠" },
     BARRACKS: { name: "Quartel",     cost: { wood: 120, stone: 60, meat: 0 }, buildTurns: 2, prod: null,         icon: "🏹" },
+  },
+  procgen: {
+    // “começo”: 1 caminho e 1 monstro perto o suficiente para aparecer na visão inicial
+    firstDistanceMin: 170,
+    firstDistanceMax: 240,
+
+    // após derrotar: ramifica 1–3 novos monstros mais longe do centro
+    branchMin: 1,
+    branchMax: 3,
+    stepDistanceMin: 170,
+    stepDistanceMax: 240,
+
+    minNodeSpacing: 120,      // evita nós colados
+    outwardPush: 60,          // garante que novos nós fiquem, em média, mais longe do centro
+    maxAttempts: 40,          // tentativas de achar posição válida
+    angleJitter: 0.85,        // quanto a ramificação pode “abrir”
   }
 };
 
 let state = null;
 
+/* ----------------- RNG com seed opcional (para testar) ----------------- */
+function xmur3(str) {
+  let h = 1779033703 ^ str.length;
+  for (let i = 0; i < str.length; i++) {
+    h = Math.imul(h ^ str.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  return function() {
+    h = Math.imul(h ^ (h >>> 16), 2246822507);
+    h = Math.imul(h ^ (h >>> 13), 3266489909);
+    h ^= h >>> 16;
+    return h >>> 0;
+  };
+}
+function mulberry32(a) {
+  return function() {
+    let t = (a += 0x6D2B79F5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function makeRng() {
+  const sp = new URLSearchParams(location.search);
+  const seed = sp.get("seed");
+  if (!seed) return Math.random;
+  const h = xmur3(String(seed));
+  return mulberry32(h());
+}
+const RNG = makeRng();
+function rand(min, max) { return min + (max - min) * RNG(); }
+function randi(min, maxInclusive) { return Math.floor(rand(min, maxInclusive + 1)); }
+
+/* ----------------- UI / util ----------------- */
 function log(msg, tone = "") {
   const p = document.createElement("div");
   p.className = `item ${tone}`;
@@ -58,7 +108,7 @@ function resize() {
 window.addEventListener("resize", resize);
 resize();
 
-/* Camera transforms */
+/* Camera */
 function screenToWorld(sx, sy) {
   const r = canvas.getBoundingClientRect();
   const cx = r.width / 2;
@@ -76,6 +126,7 @@ function worldToScreen(wx, wy) {
   return { x, y };
 }
 
+/* Resources */
 function canAfford(cost) {
   return state.resources.wood >= (cost.wood || 0) &&
          state.resources.stone >= (cost.stone || 0) &&
@@ -87,34 +138,130 @@ function pay(cost) {
   state.resources.meat -= (cost.meat || 0);
 }
 
-/* Slots around base */
+/* ----------------- Base Slots ----------------- */
 function computeSlots() {
   const slots = [];
   const { x, y } = state.base.pos;
   const r = CFG.slot.radius;
-
-  // 6 slots em volta (hex-like)
   for (let i = 0; i < 6; i++) {
     const ang = (-Math.PI / 2) + (i * (Math.PI / 3));
     const sx = x + Math.cos(ang) * r;
     const sy = y + Math.sin(ang) * r;
-    slots.push({
-      idx: i,
-      x: sx,
-      y: sy,
-      building: null, // {type, remainingTurns, built:boolean}
-    });
+    slots.push({ idx: i, x: sx, y: sy, building: null });
   }
   return slots;
 }
 
-/* Selection helpers */
+/* ----------------- Procedural World (Graph) ----------------- */
+function vecLen(x, y) { return Math.hypot(x, y); }
+function norm(x, y) {
+  const L = Math.hypot(x, y) || 1;
+  return { x: x / L, y: y / L };
+}
+
+function worldInit() {
+  state.world = {
+    nextId: 1,
+    nodes: new Map(), // id -> {id, kind, x, y, discovered, hp}
+    edges: [],        // {a,b}
+    baseNodeId: 0
+  };
+  // base node
+  state.world.nodes.set(0, { id: 0, kind: "BASE", x: 0, y: 0, discovered: true, hp: 0 });
+}
+
+function nodeById(id) { return state.world.nodes.get(id); }
+
+function isFarFromAll(x, y, minDist) {
+  const md2 = minDist * minDist;
+  for (const n of state.world.nodes.values()) {
+    const dx = x - n.x, dy = y - n.y;
+    if (dx*dx + dy*dy < md2) return false;
+  }
+  return true;
+}
+
+function addNode(kind, x, y, discovered = true, hp = 10) {
+  const id = state.world.nextId++;
+  state.world.nodes.set(id, { id, kind, x, y, discovered, hp });
+  return id;
+}
+
+function addEdge(a, b) {
+  state.world.edges.push({ a, b });
+}
+
+function spawnFirstMonster() {
+  const dist = rand(CFG.procgen.firstDistanceMin, CFG.procgen.firstDistanceMax);
+  const ang = rand(0, Math.PI * 2);
+  const x = Math.cos(ang) * dist;
+  const y = Math.sin(ang) * dist;
+
+  const id = addNode("MONSTER", x, y, true, 12);
+  addEdge(state.world.baseNodeId, id);
+  log("Um caminho surgiu… há monstros adiante.", "warn");
+}
+
+function spawnBranchesFrom(parentId) {
+  const parent = nodeById(parentId);
+  const base = nodeById(state.world.baseNodeId);
+
+  const bcount = randi(CFG.procgen.branchMin, CFG.procgen.branchMax);
+
+  // vetor “para fora” (do centro para o pai)
+  let out = { x: parent.x - base.x, y: parent.y - base.y };
+  if (vecLen(out.x, out.y) < 0.001) {
+    out = { x: rand(-1, 1), y: rand(-1, 1) };
+  }
+  out = norm(out.x, out.y);
+  const baseAngle = Math.atan2(out.y, out.x);
+
+  for (let i = 0; i < bcount; i++) {
+    let placed = false;
+
+    // espalha as ramificações (não todas no mesmo ângulo)
+    const spread = (bcount === 1) ? 0 : (i - (bcount - 1) / 2) * 0.65;
+
+    for (let attempt = 0; attempt < CFG.procgen.maxAttempts; attempt++) {
+      const dist = rand(CFG.procgen.stepDistanceMin, CFG.procgen.stepDistanceMax);
+      const jitter = rand(-CFG.procgen.angleJitter, CFG.procgen.angleJitter);
+      const ang = baseAngle + spread + jitter;
+
+      let x = parent.x + Math.cos(ang) * dist;
+      let y = parent.y + Math.sin(ang) * dist;
+
+      // empurra “para longe do centro” (garante progresso)
+      const dParent = vecLen(parent.x - base.x, parent.y - base.y);
+      const dNew = vecLen(x - base.x, y - base.y);
+      if (dNew < dParent + CFG.procgen.outwardPush) {
+        const push = (dParent + CFG.procgen.outwardPush) - dNew;
+        x += out.x * push;
+        y += out.y * push;
+      }
+
+      if (!isFarFromAll(x, y, CFG.procgen.minNodeSpacing)) continue;
+
+      const nid = addNode("MONSTER", x, y, true, 12 + Math.floor(state.turn / 3));
+      addEdge(parentId, nid);
+      placed = true;
+      break;
+    }
+
+    if (!placed) {
+      // se falhar, ainda assim não quebra o jogo
+      log("Falha ao gerar uma ramificação (sem espaço).", "warn");
+    }
+  }
+}
+
+/* ----------------- Selection / Hit tests ----------------- */
 function hitTestBase(wx, wy) {
   const s = CFG.base.size;
   const bx = state.base.pos.x;
   const by = state.base.pos.y;
   return (wx >= bx - s/2 && wx <= bx + s/2 && wy >= by - s/2 && wy <= by + s/2);
 }
+
 function hitTestSlot(wx, wy) {
   const s = CFG.slot.size;
   for (const slot of state.base.slots) {
@@ -125,15 +272,42 @@ function hitTestSlot(wx, wy) {
   return null;
 }
 
+function hitTestNode(wx, wy) {
+  // prioridade: monstro/território (exceto base)
+  const R = 26; // raio em coords mundo
+  for (const n of state.world.nodes.values()) {
+    if (n.id === state.world.baseNodeId) continue;
+    if (!n.discovered) continue;
+    const dx = wx - n.x, dy = wy - n.y;
+    if (dx*dx + dy*dy <= R*R) return n;
+  }
+  return null;
+}
+
+function clearSelection() {
+  state.selection.baseSelected = false;
+  state.selection.slotIdx = null;
+  state.selection.nodeId = null;
+}
+
 function setSelectionInfo() {
-  if (!state.selection.baseSelected && state.selection.slotIdx == null) {
-    el.selectionInfo.className = "card small muted";
-    el.selectionInfo.textContent = "Clique na base para ver os 6 slots.";
+  const { slotIdx, nodeId, baseSelected } = state.selection;
+
+  if (nodeId != null) {
+    const n = nodeById(nodeId);
+    el.selectionInfo.className = "card small";
+    if (n.kind === "MONSTER") {
+      el.selectionInfo.innerHTML = `<b>Monstros</b><div class="muted">Nó ${n.id} — HP ${n.hp}. Selecione e clique em <b>Atacar (debug)</b>.</div>`;
+    } else if (n.kind === "OWNED") {
+      el.selectionInfo.innerHTML = `<b>Território dominado</b><div class="muted">Nó ${n.id}. Em breve: construir fora da base.</div>`;
+    } else {
+      el.selectionInfo.innerHTML = `<b>Nó</b><div class="muted">${n.kind}</div>`;
+    }
     return;
   }
 
-  if (state.selection.slotIdx != null) {
-    const slot = state.base.slots[state.selection.slotIdx];
+  if (slotIdx != null) {
+    const slot = state.base.slots[slotIdx];
     const b = slot.building;
     el.selectionInfo.className = "card small";
     if (!b) {
@@ -146,12 +320,37 @@ function setSelectionInfo() {
     return;
   }
 
-  el.selectionInfo.className = "card small";
-  el.selectionInfo.innerHTML = `<b>Base (Castelo)</b><div class="muted">Selecione um slot para construir.</div>`;
+  if (baseSelected) {
+    el.selectionInfo.className = "card small";
+    el.selectionInfo.innerHTML = `<b>Base (Castelo)</b><div class="muted">Selecione um slot para construir.</div>`;
+    return;
+  }
+
+  el.selectionInfo.className = "card small muted";
+  el.selectionInfo.textContent = "Clique na base, em um slot, ou em um monstro (nó vermelho).";
 }
 
 function setBuildPanel() {
-  // Painel de construção: só funciona quando um slot estiver selecionado
+  // 1) Se selecionou monstro -> ações do nó
+  if (state.selection.nodeId != null) {
+    const n = nodeById(state.selection.nodeId);
+    if (n.kind === "MONSTER") {
+      el.buildPanel.className = "card small";
+      el.buildPanel.innerHTML = `
+        <div class="muted">Ações do nó (Monstros):</div>
+        <div style="height:10px"></div>
+        <button class="btn wide primary" data-action="attack">Atacar (debug)</button>
+        <div style="height:10px"></div>
+        <div class="muted">Ao derrotar, o território vira seu e surgem novos caminhos/monstros proceduralmente.</div>
+      `;
+      return;
+    }
+    el.buildPanel.className = "card small muted";
+    el.buildPanel.textContent = "Este território está dominado. Em breve: construir fora da base.";
+    return;
+  }
+
+  // 2) Se slot selecionado -> construir
   const slotIdx = state.selection.slotIdx;
   if (slotIdx == null) {
     el.buildPanel.className = "card small muted";
@@ -172,7 +371,8 @@ function setBuildPanel() {
     const disabled = canAfford(def.cost) ? "" : "disabled";
     return `
       <button class="btn wide ${disabled ? "disabled" : ""}" data-build="${type}" ${disabled}>
-        ${def.name} <span style="opacity:.7">(${costTxt})</span> <span style="opacity:.85; float:right">${def.buildTurns}T</span>
+        ${def.name} <span style="opacity:.7">(${costTxt})</span>
+        <span style="opacity:.85; float:right">${def.buildTurns}T</span>
       </button>
     `;
   }).join("<div style='height:8px'></div>");
@@ -190,35 +390,11 @@ function updateHUD() {
   el.resStone.textContent = Math.floor(state.resources.stone).toString();
   el.resMeat.textContent = Math.floor(state.resources.meat).toString();
   el.turnNow.textContent = state.turn.toString();
-
   setSelectionInfo();
   setBuildPanel();
 }
 
-function startNewGame() {
-  state = {
-    turn: 1,
-    resources: { ...CFG.startResources },
-    camera: { x: 0, y: 0, zoom: 1.0 },
-    base: {
-      pos: { x: 0, y: 0 },
-      slots: [],
-    },
-    // por enquanto, só deixamos “zona de monstros” desenhada (visível) para o próximo marco
-    monsterZone: { x: 180, y: 0, visible: true },
-    selection: { baseSelected: false, slotIdx: null },
-    input: { rmbDown: false, lastMouse: { x:0, y:0 } },
-  };
-
-  state.base.slots = computeSlots();
-
-  el.menuOverlay.style.display = "none";
-  el.log.innerHTML = "";
-  log("Novo jogo iniciado. Construa Fazenda, Serralheria e Pedreira.", "good");
-  updateHUD();
-}
-
-/* Build action */
+/* ----------------- Build action ----------------- */
 function tryBuild(buildType) {
   const slotIdx = state.selection.slotIdx;
   if (slotIdx == null) return;
@@ -235,29 +411,21 @@ function tryBuild(buildType) {
   }
 
   pay(def.cost);
-  slot.building = {
-    type: buildType,
-    remainingTurns: def.buildTurns,
-    built: false,
-  };
-
+  slot.building = { type: buildType, remainingTurns: def.buildTurns, built: false };
   log(`Construção iniciada: ${def.name} (conclui em ${def.buildTurns} turno(s)).`, "good");
   updateHUD();
 }
 
-/* Turn processing */
+/* ----------------- Turn processing ----------------- */
 function endTurn() {
   if (!state) return;
 
-  // 1) avançar o turno
   state.turn++;
 
-  // 2) processar construções: reduzir turnos restantes e concluir quando chegar a 0
+  // construções
   for (const slot of state.base.slots) {
     const b = slot.building;
-    if (!b) continue;
-    if (b.built) continue;
-
+    if (!b || b.built) continue;
     b.remainingTurns -= 1;
     if (b.remainingTurns <= 0) {
       b.built = true;
@@ -267,7 +435,7 @@ function endTurn() {
     }
   }
 
-  // 3) produção por turno (somente prédios construídos)
+  // produção
   let addW = 0, addS = 0, addM = 0;
   for (const slot of state.base.slots) {
     const b = slot.building;
@@ -282,20 +450,34 @@ function endTurn() {
   state.resources.stone += addS;
   state.resources.meat += addM;
 
-  if (addW || addS || addM) {
-    log(`Produção do turno: +${addW} Madeira, +${addS} Pedra, +${addM} Carne.`, "");
-  } else {
-    log("Sem produção (construa estruturas de recurso).", "warn");
-  }
+  if (addW || addS || addM) log(`Produção do turno: +${addW} Madeira, +${addS} Pedra, +${addM} Carne.`, "");
+  else log("Sem produção (construa estruturas de recurso).", "warn");
 
   updateHUD();
 }
 
-/* Input */
+/* ----------------- Monster defeat (debug) ----------------- */
+function attackSelectedMonsterDebug() {
+  const id = state.selection.nodeId;
+  if (id == null) return;
+  const n = nodeById(id);
+  if (!n || n.kind !== "MONSTER") return;
+
+  // derrota imediata (debug)
+  n.kind = "OWNED";
+  log(`Território dominado! Nó ${n.id} agora é seu.`, "good");
+
+  // gera novos caminhos/monstros proceduralmente a partir daqui
+  spawnBranchesFrom(n.id);
+  updateHUD();
+}
+
+/* ----------------- Input ----------------- */
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
 canvas.addEventListener("mousedown", (e) => {
   if (!state) return;
+
   const r = canvas.getBoundingClientRect();
   const sx = e.clientX - r.left;
   const sy = e.clientY - r.top;
@@ -307,10 +489,12 @@ canvas.addEventListener("mousedown", (e) => {
     return;
   }
 
-  // Left click selection
   const w = screenToWorld(sx, sy);
+
+  // slot/base
   const slot = hitTestSlot(w.x, w.y);
   if (slot) {
+    clearSelection();
     state.selection.baseSelected = true;
     state.selection.slotIdx = slot.idx;
     updateHUD();
@@ -318,15 +502,22 @@ canvas.addEventListener("mousedown", (e) => {
   }
 
   if (hitTestBase(w.x, w.y)) {
+    clearSelection();
     state.selection.baseSelected = true;
-    state.selection.slotIdx = null;
     updateHUD();
     return;
   }
 
-  // click empty clears slot selection
-  state.selection.slotIdx = null;
-  state.selection.baseSelected = false;
+  // nodes (monstros/territórios)
+  const node = hitTestNode(w.x, w.y);
+  if (node) {
+    clearSelection();
+    state.selection.nodeId = node.id;
+    updateHUD();
+    return;
+  }
+
+  clearSelection();
   updateHUD();
 });
 
@@ -341,7 +532,6 @@ canvas.addEventListener("mousemove", (e) => {
   const dx = sx - state.input.lastMouse.x;
   const dy = sy - state.input.lastMouse.y;
 
-  // pan camera (inverso do mouse), ajustado pelo zoom
   state.camera.x -= dx / state.camera.zoom;
   state.camera.y -= dy / state.camera.zoom;
 
@@ -354,7 +544,7 @@ window.addEventListener("mouseup", (e) => {
   if (e.button === 2) state.input.rmbDown = false;
 });
 
-// Zoom on wheel, zoom towards cursor
+// zoom
 canvas.addEventListener("wheel", (e) => {
   if (!state) return;
   e.preventDefault();
@@ -373,15 +563,22 @@ canvas.addEventListener("wheel", (e) => {
 
   const after = screenToWorld(sx, sy);
 
-  // manter o ponto sob o cursor “preso” durante o zoom
   state.camera.x += (before.x - after.x);
   state.camera.y += (before.y - after.y);
 
 }, { passive: false });
 
-/* Build panel click delegation */
+/* Delegations */
 el.buildPanel.addEventListener("click", (e) => {
   if (!state) return;
+
+  const act = e.target.closest("button[data-action]");
+  if (act) {
+    const a = act.getAttribute("data-action");
+    if (a === "attack") attackSelectedMonsterDebug();
+    return;
+  }
+
   const btn = e.target.closest("button[data-build]");
   if (!btn) return;
   const type = btn.getAttribute("data-build");
@@ -393,82 +590,168 @@ el.btnNew.addEventListener("click", startNewGame);
 el.btnMenu.addEventListener("click", () => { el.menuOverlay.style.display = "flex"; });
 el.btnEndTurn.addEventListener("click", endTurn);
 
-/* Render */
-function draw() {
-  const r = canvas.getBoundingClientRect();
-  ctx.clearRect(0, 0, r.width, r.height);
+/* ----------------- New Game ----------------- */
+function startNewGame() {
+  state = {
+    turn: 1,
+    resources: { ...CFG.startResources },
+    camera: { x: 0, y: 0, zoom: 1.0 },
+    base: { pos: { x: 0, y: 0 }, slots: [] },
+    selection: { baseSelected: false, slotIdx: null, nodeId: null },
+    input: { rmbDown: false, lastMouse: { x: 0, y: 0 } },
+    world: null,
+  };
 
-  // fundo verde (campo)
+  state.base.slots = computeSlots();
+  worldInit();
+  spawnFirstMonster();
+
+  el.menuOverlay.style.display = "none";
+  el.log.innerHTML = "";
+  log("Novo jogo iniciado (mapa procedural).", "good");
+  log("Dica: clique no monstro (nó vermelho) e use Atacar (debug) para ver ramificações.", "warn");
+  updateHUD();
+}
+
+/* ----------------- Render ----------------- */
+function drawBackground(rw, rh) {
   ctx.fillStyle = "#2a3a2a";
-  ctx.fillRect(0, 0, r.width, r.height);
+  ctx.fillRect(0, 0, rw, rh);
 
-  // efeito leve (variação) para dar “vida”
   ctx.globalAlpha = 0.12;
   for (let i = 0; i < 120; i++) {
-    const x = (i * 97) % r.width;
-    const y = (i * 53) % r.height;
+    const x = (i * 97) % rw;
+    const y = (i * 53) % rh;
     ctx.fillStyle = (i % 2 === 0) ? "#213321" : "#2f422f";
     ctx.fillRect(x, y, 14, 10);
   }
   ctx.globalAlpha = 1;
+}
+
+function drawFog(rw, rh) {
+  // fog cinza e “recortes” de visão em volta da base e de territórios dominados
+  ctx.save();
+  ctx.fillStyle = "rgba(120,120,120,0.55)";
+  ctx.fillRect(0, 0, rw, rh);
+
+  ctx.globalCompositeOperation = "destination-out";
+
+  const base = nodeById(state.world.baseNodeId);
+  const sources = [];
+
+  // base sempre
+  sources.push({ x: base.x, y: base.y, radius: CFG.fog.baseVision });
+
+  // territórios dominados expandem visão
+  for (const n of state.world.nodes.values()) {
+    if (n.kind === "OWNED") {
+      sources.push({ x: n.x, y: n.y, radius: CFG.fog.territoryVision });
+    }
+  }
+
+  for (const s of sources) {
+    const p = worldToScreen(s.x, s.y);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, s.radius * state.camera.zoom, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+function drawWorld() {
+  const r = canvas.getBoundingClientRect();
+  const rw = r.width, rh = r.height;
+
+  drawBackground(rw, rh);
 
   if (!state) return;
 
-  // desenhar “zona de visão” e fog cinza fora dela
-  const vision = CFG.fog.baseVision;
-  const base = state.base.pos;
-
-  // fog overlay (cinza) fora do alcance — simples e eficiente
-  ctx.save();
-  ctx.fillStyle = "rgba(120,120,120,0.55)";
-  ctx.fillRect(0, 0, r.width, r.height);
-
-  // “recorta” a área visível como um círculo
-  ctx.globalCompositeOperation = "destination-out";
-  const bs = worldToScreen(base.x, base.y);
-  ctx.beginPath();
-  ctx.arc(bs.x, bs.y, vision * state.camera.zoom, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-
-  // caminho para zona de monstros (terra)
-  const mz = state.monsterZone;
-  const a = worldToScreen(base.x, base.y);
-  const b = worldToScreen(mz.x, mz.y);
-  ctx.lineWidth = 10 * state.camera.zoom;
+  // fog por último (para esconder o desconhecido)
+  // mas desenhamos caminhos/nós antes para ficar sob o fog quando fora do range
+  // (assim eles “somem” quando não visíveis)
+  // 1) caminhos
+  ctx.lineCap = "round";
   ctx.strokeStyle = "rgba(140,105,70,0.85)";
-  ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  ctx.lineTo(b.x, b.y);
-  ctx.stroke();
+  ctx.lineWidth = 10 * state.camera.zoom;
 
-  // base/castelo (quadradinho cinza medieval)
+  for (const e of state.world.edges) {
+    const a = nodeById(e.a);
+    const b = nodeById(e.b);
+    if (!a?.discovered || !b?.discovered) continue;
+    const pa = worldToScreen(a.x, a.y);
+    const pb = worldToScreen(b.x, b.y);
+    ctx.beginPath();
+    ctx.moveTo(pa.x, pa.y);
+    ctx.lineTo(pb.x, pb.y);
+    ctx.stroke();
+  }
+
+  // 2) nós (monstros/territórios)
+  for (const n of state.world.nodes.values()) {
+    if (!n.discovered) continue;
+    if (n.kind === "BASE") continue;
+
+    const p = worldToScreen(n.x, n.y);
+    const isSel = state.selection.nodeId === n.id;
+
+    if (n.kind === "MONSTER") {
+      const ms = 22 * state.camera.zoom;
+      ctx.fillStyle = "rgba(160,60,60,0.85)";
+      ctx.strokeStyle = isSel ? "rgba(71,209,140,0.95)" : "rgba(255,255,255,0.25)";
+      ctx.lineWidth = isSel ? 4 : 2;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, ms, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.font = `${Math.max(11, 12 * state.camera.zoom)}px system-ui`;
+      ctx.fillStyle = "rgba(255,255,255,0.85)";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.fillText("Monstros", p.x, p.y + ms + 6);
+    }
+
+    if (n.kind === "OWNED") {
+      const ts = 18 * state.camera.zoom;
+      ctx.fillStyle = "rgba(190,190,190,0.88)";
+      ctx.strokeStyle = isSel ? "rgba(71,209,140,0.95)" : "rgba(60,60,60,0.65)";
+      ctx.lineWidth = isSel ? 4 : 2;
+      ctx.fillRect(p.x - ts/2, p.y - ts/2, ts, ts);
+      ctx.strokeRect(p.x - ts/2, p.y - ts/2, ts, ts);
+
+      ctx.font = `${Math.max(10, 11 * state.camera.zoom)}px system-ui`;
+      ctx.fillStyle = "rgba(255,255,255,0.78)";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.fillText("Território", p.x, p.y + ts/2 + 6);
+    }
+  }
+
+  // 3) base/castelo
+  const base = state.base.pos;
   const castle = worldToScreen(base.x, base.y);
   const cs = CFG.base.size * state.camera.zoom;
 
   ctx.fillStyle = "rgba(190,190,190,0.90)";
   ctx.strokeStyle = "rgba(60,60,60,0.8)";
   ctx.lineWidth = 2;
-
   ctx.fillRect(castle.x - cs/2, castle.y - cs/2, cs, cs);
   ctx.strokeRect(castle.x - cs/2, castle.y - cs/2, cs, cs);
 
-  // “crenelas” no topo (detalhe medieval)
   ctx.fillStyle = "rgba(160,160,160,0.95)";
   const cren = Math.max(4, 6 * state.camera.zoom);
   for (let i = -2; i <= 2; i++) {
     ctx.fillRect(castle.x + i*cren*1.2 - cren/2, castle.y - cs/2 - cren*0.6, cren, cren*0.8);
   }
 
-  // slots (6) ao redor do castelo
+  // 4) slots da base
   const ss = CFG.slot.size * state.camera.zoom;
   for (const slot of state.base.slots) {
     const p = worldToScreen(slot.x, slot.y);
-
     const isSelected = state.selection.slotIdx === slot.idx;
     const bld = slot.building;
 
-    // base slot visual
     ctx.fillStyle = "rgba(255,255,255,0.22)";
     ctx.strokeStyle = isSelected ? "rgba(71,209,140,0.95)" : "rgba(255,255,255,0.32)";
     ctx.lineWidth = isSelected ? 3 : 2;
@@ -476,7 +759,6 @@ function draw() {
     ctx.fillRect(p.x - ss/2, p.y - ss/2, ss, ss);
     ctx.strokeRect(p.x - ss/2, p.y - ss/2, ss, ss);
 
-    // building icon/status
     if (bld) {
       const def = CFG.buildings[bld.type];
       ctx.fillStyle = "rgba(0,0,0,0.35)";
@@ -488,7 +770,6 @@ function draw() {
       ctx.textBaseline = "middle";
       ctx.fillText(def.icon, p.x, p.y);
 
-      // se estiver construindo, desenha “1T/2T”
       if (!bld.built) {
         ctx.font = `${Math.max(10, 11 * state.camera.zoom)}px system-ui`;
         ctx.fillStyle = "rgba(255,204,102,0.95)";
@@ -497,31 +778,17 @@ function draw() {
     }
   }
 
-  // zona de monstros (placeholder visual p/ próximo marco)
-  const mzp = worldToScreen(mz.x, mz.y);
-  const ms = 22 * state.camera.zoom;
-  ctx.fillStyle = "rgba(160,60,60,0.85)";
-  ctx.strokeStyle = "rgba(255,255,255,0.25)";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(mzp.x, mzp.y, ms, 0, Math.PI*2);
-  ctx.fill();
-  ctx.stroke();
-
-  ctx.font = `${Math.max(11, 12 * state.camera.zoom)}px system-ui`;
-  ctx.fillStyle = "rgba(255,255,255,0.85)";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "top";
-  ctx.fillText("Monstros", mzp.x, mzp.y + ms + 6);
+  // 5) fog por cima
+  drawFog(rw, rh);
 }
 
 function loop() {
   requestAnimationFrame(loop);
-  draw();
+  drawWorld();
 }
 loop();
 
-/* Initial UI state */
+/* Initial UI */
 updateInitialUI();
 function updateInitialUI() {
   el.menuOverlay.style.display = "flex";
