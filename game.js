@@ -631,38 +631,79 @@ function drawBackground(rw, rh) {
 }
 
 function drawFog(rw, rh) {
-  // NÉVOA (fica por cima) — áreas exploradas são “furos” transparentes
-  ctx.save();
+  if (!state || !state.world) return;
 
-  // camada cinza cobrindo tudo
-  ctx.globalCompositeOperation = "source-over";
-  ctx.fillStyle = "rgba(140,140,140,0.70)";
-  ctx.fillRect(0, 0, rw, rh);
+  // Cria (uma vez) a camada offscreen da névoa
+  if (!drawFog._layer) {
+    drawFog._layer = document.createElement("canvas");
+    drawFog._ctx = drawFog._layer.getContext("2d");
+  }
+  const layer = drawFog._layer;
+  const fctx = drawFog._ctx;
 
-  // recorta (remove a névoa) nas áreas com visão
-  ctx.globalCompositeOperation = "destination-out";
+  // Mantém o offscreen no MESMO tamanho em pixels do canvas principal
+  const dpr = canvas.width / rw; // porque resize() usa rw * dpr
+  if (layer.width !== canvas.width || layer.height !== canvas.height) {
+    layer.width = canvas.width;
+    layer.height = canvas.height;
+  }
+
+  // Trabalha em "unidades CSS" (igual ao ctx principal após setTransform(dpr,...))
+  fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  fctx.clearRect(0, 0, rw, rh);
+
+  // 1) Pinta a névoa por cima (cinza)
+  fctx.globalCompositeOperation = "source-over";
+  fctx.globalAlpha = 1;
+  fctx.fillStyle = "rgba(170,170,170,0.80)";
+  fctx.fillRect(0, 0, rw, rh);
+
+  // 2) Recorta buracos (área visível/explorada) APENAS na camada de névoa
+  fctx.globalCompositeOperation = "destination-out";
 
   const base = nodeById(state.world.baseNodeId);
   const sources = [];
 
+  // base sempre revela
   sources.push({ x: base.x, y: base.y, radius: CFG.fog.baseVision });
 
+  // territórios dominados também revelam
   for (const n of state.world.nodes.values()) {
     if (n.kind === "OWNED") {
       sources.push({ x: n.x, y: n.y, radius: CFG.fog.territoryVision });
     }
   }
 
-  // recorte “seco” (sem degradê) para evitar artefatos nas emendas
   for (const s of sources) {
     const p = worldToScreen(s.x, s.y);
     const R = s.radius * state.camera.zoom;
 
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, R, 0, Math.PI * 2);
-    ctx.fill();
+    // Para evitar "anel" e artefatos em sobreposição:
+    // - recorte sólido no miolo
+    // - recorte com gradiente só na borda
+    const inner = Math.max(0, R * 0.72);
+
+    // miolo (100% aberto)
+    fctx.fillStyle = "rgba(0,0,0,1)";
+    fctx.beginPath();
+    fctx.arc(p.x, p.y, inner, 0, Math.PI * 2);
+    fctx.fill();
+
+    // borda suave
+    const g = fctx.createRadialGradient(p.x, p.y, inner, p.x, p.y, R);
+    g.addColorStop(0.0, "rgba(0,0,0,1)");
+    g.addColorStop(1.0, "rgba(0,0,0,0)");
+    fctx.fillStyle = g;
+    fctx.beginPath();
+    fctx.arc(p.x, p.y, R, 0, Math.PI * 2);
+    fctx.fill();
   }
 
+  // 3) Desenha a camada de névoa por cima do mundo (sem alterar o desenho do mundo)
+  ctx.save();
+  ctx.globalCompositeOperation = "source-over";
+  ctx.globalAlpha = 1;
+  ctx.drawImage(layer, 0, 0, layer.width, layer.height, 0, 0, rw, rh);
   ctx.restore();
 }
 
