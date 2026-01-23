@@ -200,6 +200,19 @@ function trainTroopOnBarracks(slotIdx, troopType, troopSlotIndex) {
   updateHUD();
 }
 
+function enterMoveMode(barracksSlotIdx) {
+  state.ui.move = { active: true, barracksSlotIdx };
+  state.ui.trainPick = null; // fecha qualquer escolha de treino aberta
+  log("Modo MOVER ativado. (Próxima etapa: seleção de tropas e clique em destino no mapa.)", "warn");
+  updateHUD();
+}
+
+function exitMoveMode() {
+  state.ui.move = { active: false, barracksSlotIdx: null };
+  log("Modo MOVER desativado.", "");
+  updateHUD();
+}
+
 function countCompletedBuildings(type) {
   let count = 0;
   for (const s of state.base.slots) {
@@ -438,7 +451,7 @@ function setBuildPanel() {
   const slot = state.base.slots[slotIdx];
   const b = slot.building;
 
-  // 2.1) Slot ocupado por Quartel: mostrar slots de tropa + treino
+  // 2.1) Slot ocupado por Quartel: mostrar slots de tropa + treino + MOVER (Parte 5)
   if (b && b.type === "BARRACKS") {
     el.buildPanel.className = "card small";
 
@@ -453,6 +466,20 @@ function setBuildPanel() {
 
     const cap = ensureTroopArray(b);
     const pick = state.ui.trainPick;
+
+    const isMoveHere = state.ui.move?.active && state.ui.move.barracksSlotIdx === slotIdx;
+
+    const moveHeader = isMoveHere
+      ? `
+        <div style="height:10px"></div>
+        <div class="muted">Modo MOVER ativo. (Próxima etapa: seleção de tropas e clique no destino.)</div>
+        <div style="height:10px"></div>
+        <button class="btn wide" data-action="cancel-move">Sair do MOVER</button>
+      `
+      : `
+        <div style="height:10px"></div>
+        <button class="btn wide primary" data-action="move">MOVER</button>
+      `;
 
     const rows = [];
     for (let i = 0; i < cap; i++) {
@@ -511,7 +538,8 @@ function setBuildPanel() {
     el.buildPanel.innerHTML = `
       <b>Quartel</b>
       <div class="muted">Slots de tropas: ${cap} (3 + Casas construídas)</div>
-      <div style="height:10px"></div>
+      ${moveHeader}
+      <div style="height:12px"></div>
       ${rows.join("<div style='height:8px'></div>")}
       ${pickUI}
     `;
@@ -766,15 +794,30 @@ canvas.addEventListener("wheel", (e) => {
 el.buildPanel.addEventListener("click", (e) => {
   if (!state) return;
 
-  // 1) ações (ex: atacar debug)
+  // 1) ações (ex: atacar debug / mover / cancelar)
   const act = e.target.closest("button[data-action]");
   if (act) {
     const a = act.getAttribute("data-action");
+
     if (a === "attack") attackSelectedMonsterDebug();
+
     if (a === "cancel-train-pick") {
       state.ui.trainPick = null;
       updateHUD();
     }
+
+    if (a === "move") {
+      const sidx = state.selection.slotIdx;
+      if (sidx == null) return;
+      const b = state.base.slots[sidx]?.building;
+      if (!b || b.type !== "BARRACKS" || !b.built) return;
+      enterMoveMode(sidx);
+    }
+
+    if (a === "cancel-move") {
+      exitMoveMode();
+    }
+
     return;
   }
 
@@ -820,7 +863,10 @@ function startNewGame() {
     selection: { baseSelected: false, slotIdx: null, nodeId: null },
     input: { rmbDown: false, lastMouse: { x: 0, y: 0 } },
     world: null,
-    ui: { trainPick: null }, // <- novo
+    ui: {
+      trainPick: null,
+      move: { active: false, barracksSlotIdx: null }, // <- novo (Parte 5)
+    },
   };
 
   state.base.slots = computeSlots();
