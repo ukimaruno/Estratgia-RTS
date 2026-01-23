@@ -488,30 +488,25 @@ function setMoveDestination(destNodeId) {
 }
 
 function incomingToNodeSummary(nodeId) {
+  const n = nodeById(nodeId);
+  if (!n || n.kind === "BASE") return { count: 0, minEta: 0, maxEta: 0 };
+
+  ensureNodeTroopSlots(n);
+
   let count = 0;
-  let minEta = null;
+  let minEta = Infinity;
   let maxEta = 0;
 
-  for (const slot of state.base.slots) {
-    const b = slot.building;
-    if (!b || b.type !== "BARRACKS" || !b.built) continue;
-
-    const cap = ensureTroopArray(b);
-    for (let i = 0; i < cap; i++) {
-      const t = b.troops[i];
-      if (!t || t.status !== "moving" || !t.move) continue;
-      if (t.move.toId !== nodeId) continue;
-
-      // ETA em "dias/turnos" = quantos passos ainda faltam no path
-      const eta = Math.max(0, t.move.path.length - t.move.next);
-
-      count++;
-      if (minEta == null || eta < minEta) minEta = eta;
-      if (eta > maxEta) maxEta = eta;
-    }
+  for (const t of n.troopSlots) {
+    if (!t || t.status !== "moving") continue;
+    count++;
+    const eta = (typeof t.eta === "number") ? t.eta : 0;
+    minEta = Math.min(minEta, eta);
+    maxEta = Math.max(maxEta, eta);
   }
 
-  return { count, minEta: minEta ?? 0, maxEta };
+  if (count === 0) minEta = 0;
+  return { count, minEta, maxEta };
 }
 
 function confirmMoveOrder() {
