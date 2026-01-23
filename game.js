@@ -487,17 +487,31 @@ function setMoveDestination(destNodeId) {
   updateHUD();
 }
 
-function countReadyTroopsAtNode(nodeId) {
-  const n = nodeById(nodeId);
-  if (!n) return 0;
-
-  ensureNodeTroopSlots(n);
-
+function incomingToNodeSummary(nodeId) {
   let count = 0;
-  for (const t of n.troopSlots) {
-    if (t && t.status === "ready") count++;
+  let minEta = null;
+  let maxEta = 0;
+
+  for (const slot of state.base.slots) {
+    const b = slot.building;
+    if (!b || b.type !== "BARRACKS" || !b.built) continue;
+
+    const cap = ensureTroopArray(b);
+    for (let i = 0; i < cap; i++) {
+      const t = b.troops[i];
+      if (!t || t.status !== "moving" || !t.move) continue;
+      if (t.move.toId !== nodeId) continue;
+
+      // ETA em "dias/turnos" = quantos passos ainda faltam no path
+      const eta = Math.max(0, t.move.path.length - t.move.next);
+
+      count++;
+      if (minEta == null || eta < minEta) minEta = eta;
+      if (eta > maxEta) maxEta = eta;
+    }
   }
-  return count;
+
+  return { count, minEta: minEta ?? 0, maxEta };
 }
 
 function confirmMoveOrder() {
@@ -722,13 +736,33 @@ function setBuildPanel() {
     if (n.kind === "MONSTER") {
       const readyHere = countReadyTroopsAtNode(n.id);
 
+      // (Opcional, mas recomendado) — feedback de tropas que já estão a caminho desse nó
+      const incoming = incomingToNodeSummary(n.id);
+      const etaLabel =
+        incoming.count > 0
+          ? (incoming.minEta === incoming.maxEta
+              ? `${incoming.minEta}`
+              : `${incoming.minEta}–${incoming.maxEta}`) + " dia(s)"
+          : "";
+
+      const incomingLine =
+        incoming.count > 0
+          ? `<div class="muted">Chegando: <b>${incoming.count}</b> tropa(s) — ETA: ${etaLabel}.</div>`
+          : `<div class="muted">Chegando: <b>0</b> tropa(s).</div>`;
+
       el.buildPanel.className = "card small";
 
       if (readyHere <= 0) {
         el.buildPanel.innerHTML = `
           <div class="muted">Ações do nó (Monstros):</div>
           <div style="height:10px"></div>
-          <div class="muted">Você precisa ter tropas <b>no território</b> para atacar.</div>
+
+          <div class="muted">Tropas prontas no território: <b>${readyHere}</b></div>
+          <div style="height:6px"></div>
+          ${incomingLine}
+
+          <div style="height:10px"></div>
+          <div class="muted">Você precisa ter tropas <b>prontas</b> no território para atacar.</div>
           <div class="muted">Use: Quartel → MOVER → escolha o destino → Confirmar → Passar Turno até chegar.</div>
         `;
         return;
@@ -739,13 +773,40 @@ function setBuildPanel() {
         <div style="height:10px"></div>
         <button class="btn wide primary" data-action="attack">Atacar (debug)</button>
         <div style="height:10px"></div>
+
         <div class="muted">Tropas prontas no território: <b>${readyHere}</b></div>
+        <div style="height:6px"></div>
+        ${incomingLine}
       `;
       return;
     }
 
-    el.buildPanel.className = "card small muted";
-    el.buildPanel.textContent = "Este território está dominado. Em breve: construir fora da base.";
+    // Território já dominado (por enquanto sem ações além de info)
+    const readyHere = countReadyTroopsAtNode(n.id);
+
+    const incoming = incomingToNodeSummary(n.id);
+    const etaLabel =
+      incoming.count > 0
+        ? (incoming.minEta === incoming.maxEta
+            ? `${incoming.minEta}`
+            : `${incoming.minEta}–${incoming.maxEta}`) + " dia(s)"
+        : "";
+
+    const incomingLine =
+      incoming.count > 0
+        ? `<div class="muted">Chegando: <b>${incoming.count}</b> tropa(s) — ETA: ${etaLabel}.</div>`
+        : `<div class="muted">Chegando: <b>0</b> tropa(s).</div>`;
+
+    el.buildPanel.className = "card small";
+    el.buildPanel.innerHTML = `
+      <div class="muted">Território dominado.</div>
+      <div style="height:10px"></div>
+      <div class="muted">Tropas prontas no território: <b>${readyHere}</b></div>
+      <div style="height:6px"></div>
+      ${incomingLine}
+      <div style="height:10px"></div>
+      <div class="muted">Em breve: construir fora da base.</div>
+    `;
     return;
   }
 
@@ -899,7 +960,7 @@ function setBuildPanel() {
     return;
   }
 
-  // 2.3) Slot vazio -> lista de construções
+  // 2.3) Slot vazio -> construir
   const buttons = Object.entries(CFG.buildings).map(([type, def]) => {
     const c = def.cost;
     const costTxt = `${c.wood||0}M ${c.stone||0}P ${c.meat||0}C`;
