@@ -138,6 +138,21 @@ function pay(cost) {
   state.resources.meat -= (cost.meat || 0);
 }
 
+function countCompletedBuildings(type) {
+  let count = 0;
+  for (const s of state.base.slots) {
+    const b = s.building;
+    if (b && b.type === type && b.built) count++;
+  }
+  return count;
+}
+
+function getBarracksSlotCapacity() {
+  // Regra: Quartel começa com 3 slots + 1 por Casa concluída
+  return 3 + countCompletedBuildings("HOUSE");
+}
+
+
 /* ----------------- Base Slots ----------------- */
 function computeSlots() {
   const slots = [];
@@ -375,12 +390,13 @@ function setBuildPanel() {
       return;
     }
 
-    // Construído: Quartel -> mostrar slots de tropas (Parte 2)
+    // Construído: Quartel -> mostrar slots de tropas (Parte 2 + Parte 3)
     if (b.type === "BARRACKS") {
-      const baseSlots = 3; // Parte 3 vai tornar isso dinâmico com Casas
+      const capacity = getBarracksSlotCapacity(); // <- Parte 3
+      const houses = countCompletedBuildings("HOUSE"); // só para exibir no texto
       const troops = Array.isArray(b.troops) ? b.troops : [];
 
-      const slotsHtml = Array.from({ length: baseSlots }, (_, i) => {
+      const slotsHtml = Array.from({ length: capacity }, (_, i) => {
         const t = troops[i];
         const label = t ? (t.type || "Unidade") : "Vazio";
         return `
@@ -400,7 +416,7 @@ function setBuildPanel() {
       el.buildPanel.className = "card small";
       el.buildPanel.innerHTML = `
         <div><b>Quartel</b></div>
-        <div class="muted">Slots de tropas (por enquanto, apenas visualização):</div>
+        <div class="muted">Slots de tropas: <b>${capacity}</b> (3 base + ${houses} Casa(s) concluída(s)).</div>
         <div style="height:10px"></div>
         <div style="display:flex; gap:10px; flex-wrap:wrap">
           ${slotsHtml}
