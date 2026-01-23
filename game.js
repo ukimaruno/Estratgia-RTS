@@ -633,45 +633,43 @@ function drawBackground(rw, rh) {
 function drawFog(rw, rh) {
   if (!state || !state.world) return;
 
-  // Cria (uma vez) a camada offscreen da névoa (já existe no seu código)
+  // camada offscreen principal (fog)
   if (!drawFog._layer) {
     drawFog._layer = document.createElement("canvas");
     drawFog._ctx = drawFog._layer.getContext("2d");
   }
+  const layer = drawFog._layer;
+  const fctx = drawFog._ctx;
 
-  // NOVO: canvas de máscara (união das áreas reveladas)
+  // NOVO: máscara (união das áreas reveladas)
   if (!drawFog._mask) {
     drawFog._mask = document.createElement("canvas");
     drawFog._mctx = drawFog._mask.getContext("2d");
   }
+  const mask = drawFog._mask;
+  const mctx = drawFog._mctx;
 
-  const layer = drawFog._layer;
-  const fctx  = drawFog._ctx;
-  const mask  = drawFog._mask;
-  const mctx  = drawFog._mctx;
-
-  // DPR igual ao seu
+  // DPR igual ao seu código
   const dpr = canvas.width / rw;
 
-  // Mantém a camada de fog no tamanho do canvas principal
+  // mantém layer no tamanho do canvas principal (pixels)
   if (layer.width !== canvas.width || layer.height !== canvas.height) {
     layer.width = canvas.width;
     layer.height = canvas.height;
   }
 
-  // Máscara em resolução reduzida (performance) — pode ajustar 0.25..0.5
-  const SCALE = 0.35;
-  const mw = Math.max(1, Math.floor(canvas.width  * SCALE));
+  // máscara em resolução reduzida (performance + borda mais limpa)
+  const SCALE = 0.40; // 0.35..0.55 (ajuste se quiser)
+  const mw = Math.max(1, Math.floor(canvas.width * SCALE));
   const mh = Math.max(1, Math.floor(canvas.height * SCALE));
   if (mask.width !== mw || mask.height !== mh) {
     mask.width = mw;
     mask.height = mh;
   }
 
-  // ===== 1) Monta lista de fontes (igual ao seu) =====
+  // ===== 1) Fontes de revelação (base + OWNED) =====
   const base = nodeById(state.world.baseNodeId);
   const sources = [];
-
   sources.push({ x: base.x, y: base.y, radius: CFG.fog.baseVision });
 
   for (const n of state.world.nodes.values()) {
@@ -680,8 +678,7 @@ function drawFog(rw, rh) {
     }
   }
 
-  // ===== 2) Desenha a MÁSCARA como união BINÁRIA (sem gradiente) =====
-  // Trabalha em unidades CSS, só que em canvas menor
+  // ===== 2) Desenha a máscara como união BINÁRIA (sem gradiente) =====
   mctx.setTransform(dpr * SCALE, 0, 0, dpr * SCALE, 0, 0);
   mctx.clearRect(0, 0, rw, rh);
   mctx.globalCompositeOperation = "source-over";
@@ -690,15 +687,40 @@ function drawFog(rw, rh) {
   for (const s of sources) {
     const p = worldToScreen(s.x, s.y);
     const R = s.radius * state.camera.zoom;
-
     mctx.beginPath();
     mctx.arc(p.x, p.y, R, 0, Math.PI * 2);
     mctx.fill();
   }
 
-  // ===== 3) Renderiza a névoa =====
+  // ===== 3) Renderiza fog na layer =====
   fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  fctx.clearRect(0, 0, rw, rh
+  fctx.clearRect(0, 0, rw, rh);
+
+  // pinta a névoa (cinza)
+  fctx.globalCompositeOperation = "source-over";
+  fctx.globalAlpha = 1;
+  fctx.fillStyle = "rgba(170,170,170,0.80)";
+  fctx.fillRect(0, 0, rw, rh);
+
+  // fura UMA VEZ usando a máscara com blur (sem acumular em overlaps)
+  fctx.save();
+  fctx.globalCompositeOperation = "destination-out";
+  fctx.imageSmoothingEnabled = true;
+
+  const blurPx = Math.max(10, 18 * state.camera.zoom);
+  fctx.filter = "blur(" + blurPx + "px)";
+  fctx.drawImage(mask, 0, 0, mask.width, mask.height, 0, 0, rw, rh);
+  fctx.filter = "none";
+
+  fctx.restore();
+
+  // ===== 4) Desenha fog por cima do mundo =====
+  ctx.save();
+  ctx.globalCompositeOperation = "source-over";
+  ctx.globalAlpha = 1;
+  ctx.drawImage(layer, 0, 0, layer.width, layer.height, 0, 0, rw, rh);
+  ctx.restore();
+}
 
 function drawWorld() {
   const r = canvas.getBoundingClientRect();
