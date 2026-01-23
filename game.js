@@ -350,7 +350,7 @@ function setBuildPanel() {
     return;
   }
 
-  // 2) Se slot selecionado -> construir
+  // 2) Se slot selecionado -> construir / ações do prédio
   const slotIdx = state.selection.slotIdx;
   if (slotIdx == null) {
     el.buildPanel.className = "card small muted";
@@ -359,12 +359,66 @@ function setBuildPanel() {
   }
 
   const slot = state.base.slots[slotIdx];
-  if (slot.building) {
-    el.buildPanel.className = "card small muted";
-    el.buildPanel.textContent = "Este slot já está ocupado.";
+  const b = slot.building;
+
+  // 2.1) Slot ocupado -> mostrar status / painel específico
+  if (b) {
+    const def = CFG.buildings[b.type];
+
+    // Em construção
+    if (!b.built) {
+      el.buildPanel.className = "card small";
+      el.buildPanel.innerHTML = `
+        <div><b>${def.name}</b></div>
+        <div class="muted">Em construção: faltam <b>${b.remainingTurns}</b> turno(s).</div>
+      `;
+      return;
+    }
+
+    // Construído: Quartel -> mostrar slots de tropas (Parte 2)
+    if (b.type === "BARRACKS") {
+      const baseSlots = 3; // Parte 3 vai tornar isso dinâmico com Casas
+      const troops = Array.isArray(b.troops) ? b.troops : [];
+
+      const slotsHtml = Array.from({ length: baseSlots }, (_, i) => {
+        const t = troops[i];
+        const label = t ? (t.type || "Unidade") : "Vazio";
+        return `
+          <div style="
+              flex: 1 1 120px;
+              border: 1px solid rgba(255,255,255,0.18);
+              border-radius: 10px;
+              padding: 10px;
+              background: rgba(255,255,255,0.06);
+            ">
+            <div style="font-weight:600">Slot ${i + 1}</div>
+            <div class="muted" style="margin-top:6px">${label}</div>
+          </div>
+        `;
+      }).join("");
+
+      el.buildPanel.className = "card small";
+      el.buildPanel.innerHTML = `
+        <div><b>Quartel</b></div>
+        <div class="muted">Slots de tropas (por enquanto, apenas visualização):</div>
+        <div style="height:10px"></div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap">
+          ${slotsHtml}
+        </div>
+      `;
+      return;
+    }
+
+    // Construído: demais prédios (sem ações por enquanto)
+    el.buildPanel.className = "card small";
+    el.buildPanel.innerHTML = `
+      <div><b>${def.name}</b></div>
+      <div class="muted">Construção concluída. (Sem ações específicas nesta etapa.)</div>
+    `;
     return;
   }
 
+  // 2.2) Slot vazio -> lista de construções
   const buttons = Object.entries(CFG.buildings).map(([type, def]) => {
     const c = def.cost;
     const costTxt = `${c.wood||0}M ${c.stone||0}P ${c.meat||0}C`;
@@ -411,7 +465,14 @@ function tryBuild(buildType) {
   }
 
   pay(def.cost);
+
   slot.building = { type: buildType, remainingTurns: def.buildTurns, built: false };
+
+  // Parte 2: Quartel já nasce com um “container” para slots de tropa (ainda vazio)
+  if (buildType === "BARRACKS") {
+    slot.building.troops = [];
+  }
+
   log(`Construção iniciada: ${def.name} (conclui em ${def.buildTurns} turno(s)).`, "good");
   updateHUD();
 }
