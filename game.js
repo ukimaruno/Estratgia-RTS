@@ -36,6 +36,10 @@ const CFG = {
     HOUSE:    { name: "Casa",        cost: { wood: 70, stone: 0,  meat: 0 }, buildTurns: 1, prod: null,         icon: "🏠" },
     BARRACKS: { name: "Quartel",     cost: { wood: 120, stone: 60, meat: 0 }, buildTurns: 2, prod: null,         icon: "🏹" },
   },
+  troops: {
+    WARRIOR: { name: "Guerreiro", cost: { meat: 25 }, trainTurns: 1, icon: "🗡️" },
+    ARCHER:  { name: "Arqueiro",  cost: { meat: 30 }, trainTurns: 1, icon: "🏹" },
+  },
   procgen: {
     // “começo”: 1 caminho e 1 monstro perto o suficiente para aparecer na visão inicial
     firstDistanceMin: 170,
@@ -136,6 +140,64 @@ function pay(cost) {
   state.resources.wood -= (cost.wood || 0);
   state.resources.stone -= (cost.stone || 0);
   state.resources.meat -= (cost.meat || 0);
+}
+
+function countBuiltHouses() {
+  let n = 0;
+  for (const slot of state.base.slots) {
+    const b = slot.building;
+    if (b && b.built && b.type === "HOUSE") n++;
+  }
+  return n;
+}
+
+function getTroopCapacity() {
+  // 3 slots base do quartel + 1 por Casa construída
+  return 3 + countBuiltHouses();
+}
+
+function ensureTroopArray(barracksBuilding) {
+  const cap = getTroopCapacity();
+  if (!Array.isArray(barracksBuilding.troops)) barracksBuilding.troops = [];
+  // garante tamanho e normaliza vazios para null
+  for (let i = 0; i < cap; i++) {
+    if (typeof barracksBuilding.troops[i] === "undefined") barracksBuilding.troops[i] = null;
+  }
+  barracksBuilding.troops.length = cap;
+  return cap;
+}
+
+function trainTroopOnBarracks(slotIdx, troopType, troopSlotIndex) {
+  const slot = state.base.slots[slotIdx];
+  const b = slot?.building;
+  if (!b || b.type !== "BARRACKS" || !b.built) return;
+
+  const tdef = CFG.troops[troopType];
+  if (!tdef) return;
+
+  const cap = ensureTroopArray(b);
+  if (troopSlotIndex < 0 || troopSlotIndex >= cap) return;
+
+  if (b.troops[troopSlotIndex]) {
+    log("Este slot de tropa já está ocupado.", "warn");
+    return;
+  }
+
+  if (!canAfford(tdef.cost)) {
+    log("Carne insuficiente para treinar esta tropa.", "warn");
+    return;
+  }
+
+  pay(tdef.cost);
+  b.troops[troopSlotIndex] = {
+    type: troopType,
+    status: "training",
+    remainingTurns: tdef.trainTurns
+  };
+
+  log(`Treino iniciado: ${tdef.name} (Slot ${troopSlotIndex + 1}) — conclui em ${tdef.trainTurns} turno(s).`, "good");
+  state.ui.trainPick = null;
+  updateHUD();
 }
 
 function countCompletedBuildings(type) {
@@ -365,7 +427,7 @@ function setBuildPanel() {
     return;
   }
 
-  // 2) Se slot selecionado -> construir / ações do prédio
+  // 2) Se slot selecionado -> construir OU (se quartel) gerenciar tropas
   const slotIdx = state.selection.slotIdx;
   if (slotIdx == null) {
     el.buildPanel.className = "card small muted";
@@ -376,65 +438,94 @@ function setBuildPanel() {
   const slot = state.base.slots[slotIdx];
   const b = slot.building;
 
-  // 2.1) Slot ocupado -> mostrar status / painel específico
-  if (b) {
-    const def = CFG.buildings[b.type];
-
-    // Em construção
-    if (!b.built) {
-      el.buildPanel.className = "card small";
-      el.buildPanel.innerHTML = `
-        <div><b>${def.name}</b></div>
-        <div class="muted">Em construção: faltam <b>${b.remainingTurns}</b> turno(s).</div>
-      `;
-      return;
-    }
-
-    // Construído: Quartel -> mostrar slots de tropas (Parte 2 + Parte 3)
-    if (b.type === "BARRACKS") {
-      const capacity = getBarracksSlotCapacity(); // <- Parte 3
-      const houses = countCompletedBuildings("HOUSE"); // só para exibir no texto
-      const troops = Array.isArray(b.troops) ? b.troops : [];
-
-      const slotsHtml = Array.from({ length: capacity }, (_, i) => {
-        const t = troops[i];
-        const label = t ? (t.type || "Unidade") : "Vazio";
-        return `
-          <div style="
-              flex: 1 1 120px;
-              border: 1px solid rgba(255,255,255,0.18);
-              border-radius: 10px;
-              padding: 10px;
-              background: rgba(255,255,255,0.06);
-            ">
-            <div style="font-weight:600">Slot ${i + 1}</div>
-            <div class="muted" style="margin-top:6px">${label}</div>
-          </div>
-        `;
-      }).join("");
-
-      el.buildPanel.className = "card small";
-      el.buildPanel.innerHTML = `
-        <div><b>Quartel</b></div>
-        <div class="muted">Slots de tropas: <b>${capacity}</b> (3 base + ${houses} Casa(s) concluída(s)).</div>
-        <div style="height:10px"></div>
-        <div style="display:flex; gap:10px; flex-wrap:wrap">
-          ${slotsHtml}
-        </div>
-      `;
-      return;
-    }
-
-    // Construído: demais prédios (sem ações por enquanto)
+  // 2.1) Slot ocupado por Quartel: mostrar slots de tropa + treino
+  if (b && b.type === "BARRACKS") {
     el.buildPanel.className = "card small";
+
+    if (!b.built) {
+      const def = CFG.buildings.BARRACKS;
+      el.buildPanel.innerHTML = `
+        <b>${def.name}</b>
+        <div class="muted">Construindo... faltam ${b.remainingTurns} turno(s).</div>
+      `;
+      return;
+    }
+
+    const cap = ensureTroopArray(b);
+    const pick = state.ui.trainPick;
+
+    const rows = [];
+    for (let i = 0; i < cap; i++) {
+      const troop = b.troops[i];
+      if (!troop) {
+        rows.push(`
+          <button class="btn wide" data-troop-pick="${i}">
+            Slot ${i + 1}: (vazio) — clicar para treinar
+          </button>
+        `);
+        continue;
+      }
+
+      const tdef = CFG.troops[troop.type];
+      if (troop.status === "training") {
+        rows.push(`
+          <div class="muted" style="padding:8px 10px; border:1px solid rgba(255,255,255,.12); border-radius:10px;">
+            Slot ${i + 1}: ${tdef.icon} ${tdef.name} — treinando (${troop.remainingTurns}T)
+          </div>
+        `);
+      } else {
+        rows.push(`
+          <div style="padding:8px 10px; border:1px solid rgba(255,255,255,.12); border-radius:10px;">
+            Slot ${i + 1}: ${tdef.icon} ${tdef.name} — pronta
+          </div>
+        `);
+      }
+    }
+
+    let pickUI = "";
+    if (pick != null && b.troops[pick] == null) {
+      const w = CFG.troops.WARRIOR;
+      const a = CFG.troops.ARCHER;
+
+      const wDis = canAfford(w.cost) ? "" : "disabled";
+      const aDis = canAfford(a.cost) ? "" : "disabled";
+
+      pickUI = `
+        <div style="height:12px"></div>
+        <div class="muted">Treinar no Slot ${pick + 1}:</div>
+        <div style="height:8px"></div>
+
+        <button class="btn wide ${wDis ? "disabled" : ""}" data-train="WARRIOR" data-troop-slot="${pick}" ${wDis}>
+          ${w.icon} ${w.name} <span style="opacity:.7">(-${w.cost.meat} Carne)</span> <span style="opacity:.85; float:right">${w.trainTurns}T</span>
+        </button>
+        <div style="height:8px"></div>
+        <button class="btn wide ${aDis ? "disabled" : ""}" data-train="ARCHER" data-troop-slot="${pick}" ${aDis}>
+          ${a.icon} ${a.name} <span style="opacity:.7">(-${a.cost.meat} Carne)</span> <span style="opacity:.85; float:right">${a.trainTurns}T</span>
+        </button>
+
+        <div style="height:10px"></div>
+        <button class="btn wide" data-action="cancel-train-pick">Cancelar</button>
+      `;
+    }
+
     el.buildPanel.innerHTML = `
-      <div><b>${def.name}</b></div>
-      <div class="muted">Construção concluída. (Sem ações específicas nesta etapa.)</div>
+      <b>Quartel</b>
+      <div class="muted">Slots de tropas: ${cap} (3 + Casas construídas)</div>
+      <div style="height:10px"></div>
+      ${rows.join("<div style='height:8px'></div>")}
+      ${pickUI}
     `;
     return;
   }
 
-  // 2.2) Slot vazio -> lista de construções
+  // 2.2) Slot ocupado por outro prédio
+  if (b) {
+    el.buildPanel.className = "card small muted";
+    el.buildPanel.textContent = "Este slot já está ocupado.";
+    return;
+  }
+
+  // 2.3) Slot vazio -> lista de construções
   const buttons = Object.entries(CFG.buildings).map(([type, def]) => {
     const c = def.cost;
     const costTxt = `${c.wood||0}M ${c.stone||0}P ${c.meat||0}C`;
@@ -482,9 +573,13 @@ function tryBuild(buildType) {
 
   pay(def.cost);
 
-  slot.building = { type: buildType, remainingTurns: def.buildTurns, built: false };
+  slot.building = {
+    type: buildType,
+    remainingTurns: def.buildTurns,
+    built: false
+  };
 
-  // Parte 2: Quartel já nasce com um “container” para slots de tropa (ainda vazio)
+  // quartel terá array de tropas (mesmo enquanto constrói)
   if (buildType === "BARRACKS") {
     slot.building.troops = [];
   }
@@ -529,6 +624,28 @@ function endTurn() {
 
   if (addW || addS || addM) log(`Produção do turno: +${addW} Madeira, +${addS} Pedra, +${addM} Carne.`, "");
   else log("Sem produção (construa estruturas de recurso).", "warn");
+
+  // treino de tropas (Quartéis construídos)
+  for (let sidx = 0; sidx < state.base.slots.length; sidx++) {
+    const slot = state.base.slots[sidx];
+    const b = slot.building;
+    if (!b || !b.built || b.type !== "BARRACKS") continue;
+
+    const cap = ensureTroopArray(b);
+
+    for (let i = 0; i < cap; i++) {
+      const t = b.troops[i];
+      if (!t || t.status !== "training") continue;
+
+      t.remainingTurns -= 1;
+      if (t.remainingTurns <= 0) {
+        t.remainingTurns = 0;
+        t.status = "ready";
+        const def = CFG.troops[t.type];
+        log(`Tropa pronta: ${def.name} (Slot ${i + 1}).`, "good");
+      }
+    }
+  }
 
   updateHUD();
 }
@@ -649,13 +766,39 @@ canvas.addEventListener("wheel", (e) => {
 el.buildPanel.addEventListener("click", (e) => {
   if (!state) return;
 
+  // 1) ações (ex: atacar debug)
   const act = e.target.closest("button[data-action]");
   if (act) {
     const a = act.getAttribute("data-action");
     if (a === "attack") attackSelectedMonsterDebug();
+    if (a === "cancel-train-pick") {
+      state.ui.trainPick = null;
+      updateHUD();
+    }
     return;
   }
 
+  // 2) selecionar um slot de tropa para abrir opções
+  const pick = e.target.closest("button[data-troop-pick]");
+  if (pick) {
+    state.ui.trainPick = Number(pick.getAttribute("data-troop-pick"));
+    updateHUD();
+    return;
+  }
+
+  // 3) treinar tropa (Guerreiro/Arqueiro) no slot escolhido
+  const train = e.target.closest("button[data-train]");
+  if (train) {
+    const troopType = train.getAttribute("data-train");
+    const troopSlotIndex = Number(train.getAttribute("data-troop-slot"));
+    const barracksSlotIdx = state.selection.slotIdx;
+    if (barracksSlotIdx != null) {
+      trainTroopOnBarracks(barracksSlotIdx, troopType, troopSlotIndex);
+    }
+    return;
+  }
+
+  // 4) construir prédios (slot vazio)
   const btn = e.target.closest("button[data-build]");
   if (!btn) return;
   const type = btn.getAttribute("data-build");
@@ -677,6 +820,7 @@ function startNewGame() {
     selection: { baseSelected: false, slotIdx: null, nodeId: null },
     input: { rmbDown: false, lastMouse: { x: 0, y: 0 } },
     world: null,
+    ui: { trainPick: null }, // <- novo
   };
 
   state.base.slots = computeSlots();
