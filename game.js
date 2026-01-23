@@ -205,20 +205,24 @@ function enterMoveMode(barracksSlotIdx) {
   const b = slot?.building;
   if (!b || b.type !== "BARRACKS" || !b.built) return;
 
-  // garante array no tamanho correto (3 + Casas)
   const cap = ensureTroopArray(b);
 
-  // auto-seleciona todas as tropas prontas
   const selectedSlots = new Set();
   for (let i = 0; i < cap; i++) {
     const t = b.troops[i];
     if (t && t.status === "ready") selectedSlots.add(i);
   }
 
-  state.ui.move = { active: true, barracksSlotIdx, selectedSlots };
-  state.ui.trainPick = null; // fecha qualquer escolha de treino aberta
+  state.ui.move = {
+    active: true,
+    barracksSlotIdx,
+    selectedSlots,
+    order: null, // <- nesta etapa, destino começa vazio
+  };
 
-  log("Modo MOVER ativado. Troops prontas foram selecionadas automaticamente.", "warn");
+  state.ui.trainPick = null;
+
+  log("Modo MOVER ativado. Agora clique em um nó no mapa para definir o destino.", "warn");
   updateHUD();
 }
 
@@ -294,6 +298,78 @@ function addNode(kind, x, y, discovered = true, hp = 10) {
 
 function addEdge(a, b) {
   state.world.edges.push({ a, b });
+}
+
+function buildAdjacency() {
+  const adj = new Map();
+  for (const n of state.world.nodes.values()) adj.set(n.id, []);
+  for (const e of state.world.edges) {
+    if (adj.has(e.a)) adj.get(e.a).push(e.b);
+    if (adj.has(e.b)) adj.get(e.b).push(e.a);
+  }
+  return adj;
+}
+
+function shortestPathBFS(startId, goalId) {
+  if (startId === goalId) return [startId];
+
+  const adj = buildAdjacency();
+  const q = [startId];
+  let qi = 0;
+
+  const prev = new Map();
+  prev.set(startId, null);
+
+  while (qi < q.length) {
+    const cur = q[qi++];
+    const neigh = adj.get(cur) || [];
+    for (const nx of neigh) {
+      if (prev.has(nx)) continue;
+      prev.set(nx, cur);
+      if (nx === goalId) {
+        // reconstruir path
+        const path = [];
+        let p = goalId;
+        while (p != null) {
+          path.push(p);
+          p = prev.get(p);
+        }
+        path.reverse();
+        return path;
+      }
+      q.push(nx);
+    }
+  }
+  return null;
+}
+
+function setMoveDestination(destNodeId) {
+  const m = state.ui.move;
+  if (!m?.active || m.barracksSlotIdx == null) return;
+
+  if (!(m.selectedSlots instanceof Set) || m.selectedSlots.size === 0) {
+    log("Selecione pelo menos 1 tropa (borda verde) antes de escolher o destino.", "warn");
+    return;
+  }
+
+  const fromId = state.world.baseNodeId; // por enquanto, tropas saem da Base
+  const path = shortestPathBFS(fromId, destNodeId);
+
+  if (!path) {
+    log("Destino não alcançável (sem caminho no grafo).", "warn");
+    return;
+  }
+
+  m.order = {
+    fromId,
+    toId: destNodeId,
+    path,
+    steps: Math.max(0, path.length - 1),
+  };
+
+  const dn = nodeById(destNodeId);
+  log(`Destino definido: Nó ${destNodeId} (${dn?.kind || "?"}) — distância: ${m.order.steps} etapa(s).`, "good");
+  updateHUD();
 }
 
 function spawnFirstMonster() {
@@ -761,6 +837,7 @@ canvas.addEventListener("mousedown", (e) => {
   const sx = e.clientX - r.left;
   const sy = e.clientY - r.top;
 
+  // pan (botão direito)
   if (e.button === 2) {
     state.input.rmbDown = true;
     state.input.lastMouse.x = sx;
@@ -790,6 +867,13 @@ canvas.addEventListener("mousedown", (e) => {
   // nodes (monstros/territórios)
   const node = hitTestNode(w.x, w.y);
   if (node) {
+    // Se estiver no modo MOVER: clique em nó define destino (sem perder seleção do quartel)
+    if (state.ui.move?.active) {
+      setMoveDestination(node.id);
+      return;
+    }
+
+    // Seleção normal
     clearSelection();
     state.selection.nodeId = node.id;
     updateHUD();
