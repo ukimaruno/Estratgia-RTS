@@ -364,12 +364,10 @@ function isFarFromAll(x, y, minDist) {
 
 function addNode(kind, x, y, discovered = true, hp = 10) {
   const id = state.world.nextId++;
-
   const node = { id, kind, x, y, discovered, hp };
 
-  // NOVO: slots de tropas por nó (apenas MONSTER/OWNED)
-  const cap = getNodeSlotCapacity(node);
-  if (cap > 0) node.garrison = Array(cap).fill(null);
+  // v2: padroniza slots de tropas em nós (troopSlots/troopSlotsCap)
+  ensureNodeTroopSlots(node);
 
   state.world.nodes.set(id, node);
   return id;
