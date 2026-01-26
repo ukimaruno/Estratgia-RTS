@@ -522,7 +522,7 @@ function confirmMoveOrder() {
     return;
   }
 
-  // Origem (MVP: todas no mesmo nó)
+  // origem (MVP: mesma origem)
   const origin = b.troops[picked[0]].nodeId ?? state.world.baseNodeId;
   for (const i of picked) {
     const t = b.troops[i];
@@ -532,6 +532,7 @@ function confirmMoveOrder() {
     }
   }
 
+  // calcula path e steps
   const path = shortestPathBFS(origin, m.order.toId);
   if (!path) {
     log("Destino não alcançável (sem caminho).", "warn");
@@ -544,26 +545,46 @@ function confirmMoveOrder() {
     return;
   }
 
-  // Checa slots no destino (considerando reservas pendentes)
   const dest = nodeById(m.order.toId);
-  ensureNodeTroopSlots(dest);
-
-  const sum = getNodeTroopSummary(dest);
-  if (picked.length > sum.free) {
-    log(`Sem slots suficientes no destino. Destino tem ${sum.cap} slots: ocupados=${sum.ready + sum.moving}, reservados=${sum.reserved}, livres=${sum.free}.`, "warn");
+  if (!dest) {
+    log("Destino inválido.", "warn");
     return;
   }
 
-  // Reserva slots e marca tropas como "queued" (saem só no próximo turno)
-  dest.incomingReserved += picked.length;
+  ensureNodeTroopSlots(dest);
 
-  for (const i of picked) {
-    const t = b.troops[i];
-    t.status = "queued"; // <- novo status
-    t.queue = { toId: dest.id, steps }; // <- sai no endTurn
+  // capacidade real do destino = slots vazios (não usamos mais incomingReserved/queued)
+  const freeIdxs = [];
+  for (let s = 0; s < dest.troopSlots.length; s++) {
+    if (!dest.troopSlots[s]) freeIdxs.push(s);
   }
 
-  log(`Movimento agendado: ${picked.length} tropa(s) sairão no próximo turno e chegarão em ${steps} dia(s) no Nó ${dest.id}.`, "good");
+  if (picked.length > freeIdxs.length) {
+    log(
+      `Sem slots suficientes no destino. Tentando mover ${picked.length}, mas há apenas ${freeIdxs.length} slot(s) livre(s) (capacidade ${dest.troopSlots.length}).`,
+      "warn"
+    );
+    return;
+  }
+
+  // DESPACHO IMEDIATO:
+  // 1) ocupa destino com moving+eta
+  // 2) libera slot do quartel agora
+  for (let k = 0; k < picked.length; k++) {
+    const troopIdx = picked[k];
+    const t = b.troops[troopIdx];
+
+    const slotDest = freeIdxs[k];
+    dest.troopSlots[slotDest] = {
+      type: t.type,
+      status: "moving",
+      eta: steps
+    };
+
+    b.troops[troopIdx] = null; // libera imediatamente
+  }
+
+  log(`Movimento iniciado: ${picked.length} tropa(s) enviadas ao Nó ${dest.id} — chegam em ${steps} dia(s).`, "good");
 
   exitMoveMode();
   updateHUD();
@@ -1083,46 +1104,6 @@ function endTurn() {
 
     if (arrived > 0) {
       log(`Tropas chegaram ao Nó ${n.id}: ${arrived}.`, "good");
-    }
-  }
-
-  // 5) DESPACHO: tropas "queued" saem AGORA do Quartel e ocupam slots do destino
-  for (const baseSlot of state.base.slots) {
-    const b = baseSlot.building;
-    if (!b || b.type !== "BARRACKS" || !b.built) continue;
-
-    const cap = ensureTroopArray(b);
-
-    for (let i = 0; i < cap; i++) {
-      const t = b.troops[i];
-      if (!t || t.status !== "queued" || !t.queue) continue;
-
-      const dest = nodeById(t.queue.toId);
-      ensureNodeTroopSlots(dest);
-
-      // encontra 1 slot livre (já foi reservado no confirm)
-      const freeIdx = dest.troopSlots.findIndex(x => !x);
-      if (freeIdx === -1) {
-        // fallback de segurança: cancela e devolve a reserva
-        dest.incomingReserved = Math.max(0, (dest.incomingReserved || 0) - 1);
-        t.status = "ready";
-        delete t.queue;
-        log(`Falha ao despachar: destino Nó ${dest.id} ficou sem slot livre. Movimento cancelado.`, "warn");
-        continue;
-      }
-
-      // ocupa o slot do nó como "moving" (aparece instantaneamente no destino)
-      dest.troopSlots[freeIdx] = {
-        type: t.type,
-        status: "moving",
-        eta: t.queue.steps
-      };
-
-      // consome a reserva
-      dest.incomingReserved = Math.max(0, (dest.incomingReserved || 0) - 1);
-
-      // libera o slot do Quartel (agora dá para produzir outra tropa)
-      b.troops[i] = null;
     }
   }
 
