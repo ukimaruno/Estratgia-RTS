@@ -326,44 +326,31 @@ function getNodeTroopSummary(node) {
   return { cap, ready, moving, reserved, free, minEta };
 }
 
-function getNodeSlotCapacity(node) {
-  if (!node) return 0;
-  return (node.kind === "MONSTER" || node.kind === "OWNED") ? 3 : 0;
-}
+function countReadyTroopsAtNode(nodeId) {
+  if (!state || !state.world) return 0;
 
-function ensureNodeGarrison(node) {
-  const cap = getNodeSlotCapacity(node);
-  if (cap <= 0) return 0;
+  // BASE: as tropas “moram” nos Quartéis (BARRACKS)
+  if (nodeId === state.world.baseNodeId) {
+    let count = 0;
+    for (const slot of state.base.slots) {
+      const b = slot.building;
+      if (!b || b.type !== "BARRACKS" || !b.built) continue;
 
-  if (!Array.isArray(node.garrison)) node.garrison = Array(cap).fill(null);
-
-  for (let i = 0; i < cap; i++) {
-    if (typeof node.garrison[i] === "undefined") node.garrison[i] = null;
-  }
-  node.garrison.length = cap;
-  return cap;
-}
-
-function getNodeGarrisonSummary(node) {
-  const cap = ensureNodeGarrison(node);
-  let ready = 0, moving = 0, free = 0;
-  let minEta = null;
-
-  if (!Array.isArray(node.garrison) || cap <= 0) {
-    return { cap: 0, ready: 0, moving: 0, free: 0, minEta: null };
-  }
-
-  for (const u of node.garrison) {
-    if (!u) { free++; continue; }
-    if (u.status === "ready") ready++;
-    else if (u.status === "moving") {
-      moving++;
-      const eta = Math.max(0, Number(u.eta ?? 0));
-      if (minEta == null || eta < minEta) minEta = eta;
+      const cap = ensureTroopArray(b);
+      for (let i = 0; i < cap; i++) {
+        const t = b.troops[i];
+        if (t && t.status === "ready" && (t.nodeId ?? state.world.baseNodeId) === nodeId) {
+          count++;
+        }
+      }
     }
+    return count;
   }
 
-  return { cap, ready, moving, free, minEta };
+  // NÓ DO MAPA: fonte da verdade = troopSlots
+  const n = nodeById(nodeId);
+  if (!n) return 0;
+  return getNodeTroopSummary(n).ready;
 }
 
 function isFarFromAll(x, y, minDist) {
@@ -1508,9 +1495,6 @@ function drawWorld() {
 
   if (!state) return;
 
-  // fog por último (para esconder o desconhecido)
-  // mas desenhamos caminhos/nós antes para ficar sob o fog quando fora do range
-  // (assim eles “somem” quando não visíveis)
   // 1) caminhos
   ctx.lineCap = "round";
   ctx.strokeStyle = "rgba(140,105,70,0.85)";
@@ -1528,6 +1512,25 @@ function drawWorld() {
     ctx.stroke();
   }
 
+  // helper (somente desenho no canvas)
+  function drawTroopBadge(node, x, y, baseOffsetY) {
+    const sum = getNodeTroopSummary(node); // pronto/movendo/cap/minEta baseado em troopSlots
+    const z = state.camera.zoom;
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(255,255,255,0.90)";
+    ctx.font = `${Math.max(10, 11 * z)}px system-ui`;
+    ctx.textBaseline = "bottom";
+    ctx.fillText(`${sum.ready}/${sum.cap}`, x, y - baseOffsetY);
+
+    if (sum.moving > 0) {
+      ctx.fillStyle = "rgba(255,255,255,0.75)";
+      ctx.textBaseline = "top";
+      const etaTxt = (sum.minEta && sum.minEta > 0) ? ` (ETA ${sum.minEta})` : "";
+      ctx.fillText(`+${sum.moving}${etaTxt}`, x, y + baseOffsetY);
+    }
+  }
+
   // 2) nós (monstros/territórios)
   for (const n of state.world.nodes.values()) {
     if (!n.discovered) continue;
@@ -1537,56 +1540,48 @@ function drawWorld() {
     const isSel = state.selection.nodeId === n.id;
 
     if (n.kind === "MONSTER") {
-      const g = getNodeGarrisonSummary(n);
-      const readyHere = g.ready;
+      const ms = 22 * state.camera.zoom;
 
-      el.buildPanel.className = "card small";
+      ctx.fillStyle = "rgba(160,60,60,0.85)";
+      ctx.strokeStyle = isSel ? "rgba(71,209,140,0.95)" : "rgba(255,255,255,0.25)";
+      ctx.lineWidth = isSel ? 4 : 2;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, ms, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
 
-      const infoSlots = `
-        <div class="muted">Slots no território: <b>${g.cap}</b> • Livres: <b>${g.free}</b></div>
-        <div class="muted">Prontas: <b>${g.ready}</b> • Chegando: <b>${g.moving}</b>${g.moving ? ` • Menor ETA: <b>${g.minEta ?? "?"}</b>` : ""}</div>
-      `;
+      ctx.font = `${Math.max(11, 12 * state.camera.zoom)}px system-ui`;
+      ctx.fillStyle = "rgba(255,255,255,0.85)";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.fillText("Monstros", p.x, p.y + ms + 6);
 
-      if (readyHere <= 0) {
-        el.buildPanel.innerHTML = `
-          <div class="muted">Ações do nó (Monstros):</div>
-          <div style="height:10px"></div>
-          ${infoSlots}
-          <div style="height:10px"></div>
-          <div class="muted">Você precisa ter tropas <b>prontas</b> no território para atacar.</div>
-          <div class="muted">Use: Quartel → MOVER → destino → Confirmar → Passar Turno até ETA = 0.</div>
-        `;
-        return;
-      }
-
-      el.buildPanel.innerHTML = `
-        <div class="muted">Ações do nó (Monstros):</div>
-        <div style="height:10px"></div>
-        ${infoSlots}
-        <div style="height:10px"></div>
-        <button class="btn wide primary" data-action="attack">Atacar (debug)</button>
-      `;
-      return;
+      // indicador de tropas (canvas)
+      drawTroopBadge(n, p.x, p.y, ms + 6);
     }
 
     if (n.kind === "OWNED") {
       const ts = 18 * state.camera.zoom;
+
       ctx.fillStyle = "rgba(190,190,190,0.88)";
       ctx.strokeStyle = isSel ? "rgba(71,209,140,0.95)" : "rgba(60,60,60,0.65)";
       ctx.lineWidth = isSel ? 4 : 2;
       ctx.fillRect(p.x - ts/2, p.y - ts/2, ts, ts);
       ctx.strokeRect(p.x - ts/2, p.y - ts/2, ts, ts);
 
-      ctx.font = `${Math.max(10, 11 * state.camera.zoom)}px system-ui`;
-      ctx.fillStyle = "rgba(255,255,255,0.78)";
+      ctx.font = `${Math.max(11, 12 * state.camera.zoom)}px system-ui`;
+      ctx.fillStyle = "rgba(30,30,30,0.85)";
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
       ctx.fillText("Território", p.x, p.y + ts/2 + 6);
+
+      // indicador de tropas (canvas)
+      drawTroopBadge(n, p.x, p.y, ts/2 + 6);
     }
   }
 
-  // 3) base/castelo
-  const base = state.base.pos;
+  // 3) base (castelo)
+  const base = nodeById(state.world.baseNodeId) || state.base.pos;
   const castle = worldToScreen(base.x, base.y);
   const cs = CFG.base.size * state.camera.zoom;
 
@@ -1599,7 +1594,12 @@ function drawWorld() {
   ctx.fillStyle = "rgba(160,160,160,0.95)";
   const cren = Math.max(4, 6 * state.camera.zoom);
   for (let i = -2; i <= 2; i++) {
-    ctx.fillRect(castle.x + i*cren*1.2 - cren/2, castle.y - cs/2 - cren*0.6, cren, cren*0.8);
+    ctx.fillRect(
+      castle.x + i*cren*1.2 - cren/2,
+      castle.y - cs/2 - cren*0.6,
+      cren,
+      cren*0.8
+    );
   }
 
   // 4) slots da base
