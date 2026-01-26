@@ -1114,8 +1114,17 @@ function endTurn() {
 function attackSelectedMonsterDebug() {
   const id = state.selection.nodeId;
   if (id == null) return;
+
   const n = nodeById(id);
   if (!n || n.kind !== "MONSTER") return;
+
+  // TRAVA (Parte 10): só ataca se existir tropa pronta no território
+  const readyHere = countReadyTroopsAtNode(n.id);
+  if (readyHere <= 0) {
+    log("Você precisa ter tropas prontas no nó para atacar.", "warn");
+    updateHUD();
+    return;
+  }
 
   // derrota imediata (debug)
   n.kind = "OWNED";
