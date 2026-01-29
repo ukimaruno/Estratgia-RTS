@@ -152,9 +152,47 @@ function countBuiltHouses() {
   return n;
 }
 
+// NOVO: população máxima = 6 + 1 por Casa (global, por enquanto contando só a base)
+const BASE_POP_CAP = 6;
+
+function getPopulationCap() {
+  return BASE_POP_CAP + countBuiltHouses();
+}
+
+// NOVO: população usada = total de tropas existentes (no quartel + nos nós)
+function getPopulationUsed() {
+  let used = 0;
+
+  // tropas ainda “guardadas” em quartéis (base)
+  for (const slot of state.base.slots) {
+    const b = slot.building;
+    if (!b || b.type !== "BARRACKS") continue;
+    ensureTroopArray(b);
+    for (const t of b.troops) {
+      if (!t) continue;
+      if (t.status === "dead") continue;
+      used++;
+    }
+  }
+
+  // tropas alocadas em nós (moving/ready)
+  if (state.world?.nodes) {
+    for (const node of state.world.nodes.values()) {
+      if (!node || !Array.isArray(node.troopSlots)) continue;
+      for (const t of node.troopSlots) {
+        if (!t) continue;
+        if (t.status === "dead") continue;
+        used++;
+      }
+    }
+  }
+
+  return used;
+}
+
+// AJUSTE: slots de tropas NÃO aumentam com Casas (agora é fixo: 3)
 function getTroopCapacity() {
-  // 3 slots base do quartel + 1 por Casa construída
-  return 3 + countBuiltHouses();
+  return 3;
 }
 
 function ensureTroopArray(barracksBuilding) {
@@ -181,6 +219,14 @@ function trainTroopOnBarracks(slotIdx, troopType, troopSlotIndex) {
 
   if (b.troops[troopSlotIndex]) {
     log("Este slot de tropa já está ocupado.", "warn");
+    return;
+  }
+
+  // NOVO: trava por população máxima
+  const used = getPopulationUsed();
+  const popCap = getPopulationCap();
+  if (used >= popCap) {
+    log("População máxima atingida. Construa CASAS para aumentar!", "warn");
     return;
   }
 
@@ -946,7 +992,8 @@ function setBuildPanel() {
 
     el.buildPanel.innerHTML = `
       <b>Quartel</b>
-      <div class="muted">Slots de tropas: ${cap} (3 + Casas construídas)</div>
+      <div class="muted">Slots de tropas: ${cap} (fixo)</div>
+      <div class="muted">População: ${getPopulationUsed()}/${getPopulationCap()}</div>
       ${moveHeader}
       <div style="height:12px"></div>
       ${rows.join("<div style='height:8px'></div>")}
@@ -988,6 +1035,12 @@ function updateHUD() {
   el.resStone.textContent = Math.floor(state.resources.stone).toString();
   el.resMeat.textContent = Math.floor(state.resources.meat).toString();
   el.turnNow.textContent = state.turn.toString();
+
+  // NOVO
+  if (el.resPop) {
+    el.resPop.textContent = `${getPopulationUsed()}/${getPopulationCap()}`;
+  }
+
   setSelectionInfo();
   setBuildPanel();
 }
