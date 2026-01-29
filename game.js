@@ -192,7 +192,8 @@ function getPopulationUsed() {
 
 // AJUSTE: slots de tropas NÃO aumentam com Casas (agora é fixo: 3)
 function getTroopCapacity() {
-  return 3;
+  // Novo design: a Base (e futuramente sub-bases) têm 3 slots fixos de tropas.
+  return NODE_TROOP_SLOTS_DEFAULT; // 3
 }
 
 function ensureTroopArray(barracksBuilding) {
@@ -214,18 +215,22 @@ function trainTroopOnBarracks(slotIdx, troopType, troopSlotIndex) {
   const tdef = CFG.troops[troopType];
   if (!tdef) return;
 
-  const cap = ensureTroopArray(b);
-  if (troopSlotIndex < 0 || troopSlotIndex >= cap) return;
+  // Treino agora preenche os slots de tropas da BASE (não do quartel).
+  const baseNode = nodeById(state.world.baseNodeId);
+  if (!baseNode) return;
+  ensureNodeTroopSlots(baseNode);
 
-  if (b.troops[troopSlotIndex]) {
-    log("Este slot de tropa já está ocupado.", "warn");
+  if (troopSlotIndex < 0 || troopSlotIndex >= baseNode.troopSlots.length) return;
+
+  if (baseNode.troopSlots[troopSlotIndex]) {
+    log("Este slot de tropa já está ocupado na Base.", "warn");
     return;
   }
 
-  // NOVO: trava por população máxima
-  const used = getPopulationUsed();
-  const popCap = getPopulationCap();
-  if (used >= popCap) {
+  // População (se existir no seu código; se não existir, ignora)
+  const popCap = (typeof getPopulationCap === "function") ? getPopulationCap() : Infinity;
+  const popUsed = (typeof getPopulationUsed === "function") ? getPopulationUsed() : 0;
+  if (popUsed >= popCap) {
     log("População máxima atingida. Construa CASAS para aumentar!", "warn");
     return;
   }
@@ -237,12 +242,10 @@ function trainTroopOnBarracks(slotIdx, troopType, troopSlotIndex) {
 
   pay(tdef.cost);
 
-  b.troops[troopSlotIndex] = {
+  baseNode.troopSlots[troopSlotIndex] = {
     type: troopType,
     status: "training",
     remainingTurns: tdef.trainTurns,
-    nodeId: state.world.baseNodeId, // nasce na Base
-    move: null
   };
 
   log(`Treino iniciado: ${tdef.name} (Slot ${troopSlotIndex + 1}) — conclui em ${tdef.trainTurns} turno(s).`, "good");
@@ -250,34 +253,34 @@ function trainTroopOnBarracks(slotIdx, troopType, troopSlotIndex) {
   updateHUD();
 }
 
-function enterMoveMode(barracksSlotIdx) {
-  const slot = state.base.slots[barracksSlotIdx];
-  const b = slot?.building;
-  if (!b || b.type !== "BARRACKS" || !b.built) return;
+function enterMoveMode(fromNodeId) {
+  const from = nodeById(fromNodeId);
+  if (!from) return;
 
-  const cap = ensureTroopArray(b);
+  ensureNodeTroopSlots(from);
 
   const selectedSlots = new Set();
-  for (let i = 0; i < cap; i++) {
-    const t = b.troops[i];
+  for (let i = 0; i < from.troopSlots.length; i++) {
+    const t = from.troopSlots[i];
     if (t && t.status === "ready") selectedSlots.add(i);
   }
 
   state.ui.move = {
     active: true,
-    barracksSlotIdx,
+    fromNodeId,
     selectedSlots,
-    order: null, // <- nesta etapa, destino começa vazio
+    order: null, // destino começa vazio
   };
 
+  // Se estiver escolhendo treino, cancela (evita conflito de UI)
   state.ui.trainPick = null;
 
-  log("Modo MOVER ativado. Agora clique em um nó no mapa para definir o destino.", "warn");
+  log("Modo MOVER ativado. Clique em um nó no mapa para definir o destino.", "warn");
   updateHUD();
 }
 
 function exitMoveMode() {
-  state.ui.move = { active: false, barracksSlotIdx: null, selectedSlots: null };
+  state.ui.move = { active: false, fromNodeId: null, selectedSlots: null, order: null };
   log("Modo MOVER desativado.", "");
   updateHUD();
 }
@@ -337,18 +340,19 @@ const NODE_TROOP_SLOTS_DEFAULT = 3;
 function ensureNodeTroopSlots(node) {
   if (!node) return null;
 
-  // Base não usa slots de nó (as tropas "em casa" ficam no Quartel)
-  if (node.kind === "BASE") {
-    if (!Array.isArray(node.troopSlots)) node.troopSlots = [];
-    node.troopSlotsCap = 0;
-    node.incomingReserved = 0;
-    return node.troopSlots;
+  // Agora: TODO nó (inclusive BASE) tem slots próprios.
+  if (typeof node.troopSlotsCap !== "number") node.troopSlotsCap = NODE_TROOP_SLOTS_DEFAULT;
+
+  if (!Array.isArray(node.troopSlots) || node.troopSlots.length !== node.troopSlotsCap) {
+    node.troopSlots = new Array(node.troopSlotsCap).fill(null);
+  } else {
+    // normaliza undefined -> null
+    for (let i = 0; i < node.troopSlotsCap; i++) {
+      if (typeof node.troopSlots[i] === "undefined") node.troopSlots[i] = null;
+    }
   }
 
-  if (typeof node.troopSlotsCap !== "number") node.troopSlotsCap = NODE_TROOP_SLOTS_DEFAULT;
-  if (!Array.isArray(node.troopSlots)) node.troopSlots = new Array(node.troopSlotsCap).fill(null);
-  if (typeof node.incomingReserved !== "number") node.incomingReserved = 0;
-
+  if (typeof node.incomingReserved !== "number") node.incomingReserved = 0; // compat (pode ficar 0)
   return node.troopSlots;
 }
 
@@ -375,26 +379,6 @@ function getNodeTroopSummary(node) {
 
 function countReadyTroopsAtNode(nodeId) {
   if (!state || !state.world) return 0;
-
-  // BASE: as tropas “moram” nos Quartéis (BARRACKS)
-  if (nodeId === state.world.baseNodeId) {
-    let count = 0;
-    for (const slot of state.base.slots) {
-      const b = slot.building;
-      if (!b || b.type !== "BARRACKS" || !b.built) continue;
-
-      const cap = ensureTroopArray(b);
-      for (let i = 0; i < cap; i++) {
-        const t = b.troops[i];
-        if (t && t.status === "ready" && (t.nodeId ?? state.world.baseNodeId) === nodeId) {
-          count++;
-        }
-      }
-    }
-    return count;
-  }
-
-  // NÓ DO MAPA: fonte da verdade = troopSlots
   const n = nodeById(nodeId);
   if (!n) return 0;
   return getNodeTroopSummary(n).ready;
@@ -469,46 +453,34 @@ function shortestPathBFS(startId, goalId) {
 
 function setMoveDestination(destNodeId) {
   const m = state.ui.move;
-  if (!m?.active || m.barracksSlotIdx == null) return;
+  if (!m?.active || m.fromNodeId == null) return;
 
   if (!(m.selectedSlots instanceof Set) || m.selectedSlots.size === 0) {
     log("Selecione pelo menos 1 tropa (borda verde) antes de escolher o destino.", "warn");
     return;
   }
 
-  const slot = state.base.slots[m.barracksSlotIdx];
-  const b = slot?.building;
-  if (!b || b.type !== "BARRACKS" || !b.built) return;
+  const from = nodeById(m.fromNodeId);
+  if (!from) return;
+  ensureNodeTroopSlots(from);
 
-  const cap = ensureTroopArray(b);
   const picked = Array.from(m.selectedSlots)
-    .filter(i => i >= 0 && i < cap)
-    .filter(i => b.troops[i] && b.troops[i].status === "ready");
+    .filter(i => i >= 0 && i < from.troopSlots.length)
+    .filter(i => from.troopSlots[i] && from.troopSlots[i].status === "ready");
 
   if (picked.length === 0) {
     log("Nenhuma tropa pronta selecionada para mover.", "warn");
     return;
   }
 
-  // origem = localização atual da primeira tropa selecionada (MVP exige mesma origem)
-  const fromId = b.troops[picked[0]].nodeId ?? state.world.baseNodeId;
-  for (const i of picked) {
-    const t = b.troops[i];
-    const nid = t.nodeId ?? state.world.baseNodeId;
-    if (nid !== fromId) {
-      log("As tropas selecionadas estão em locais diferentes. Selecione tropas do mesmo território.", "warn");
-      return;
-    }
-  }
-
-  const path = shortestPathBFS(fromId, destNodeId);
+  const path = shortestPathBFS(m.fromNodeId, destNodeId);
   if (!path) {
     log("Destino não alcançável (sem caminho no grafo).", "warn");
     return;
   }
 
   m.order = {
-    fromId,
+    fromId: m.fromNodeId,
     toId: destNodeId,
     path,
     steps: Math.max(0, path.length - 1),
@@ -543,7 +515,7 @@ function incomingToNodeSummary(nodeId) {
 
 function confirmMoveOrder() {
   const m = state.ui.move;
-  if (!m?.active || m.barracksSlotIdx == null) return;
+  if (!m?.active || m.fromNodeId == null) return;
 
   if (!(m.selectedSlots instanceof Set) || m.selectedSlots.size === 0) {
     log("Selecione pelo menos 1 tropa (borda verde) para mover.", "warn");
@@ -555,32 +527,20 @@ function confirmMoveOrder() {
     return;
   }
 
-  const slot = state.base.slots[m.barracksSlotIdx];
-  const b = slot?.building;
-  if (!b || b.type !== "BARRACKS" || !b.built) return;
+  const from = nodeById(m.fromNodeId);
+  if (!from) return;
+  ensureNodeTroopSlots(from);
 
-  const cap = ensureTroopArray(b);
   const picked = Array.from(m.selectedSlots)
-    .filter(i => i >= 0 && i < cap)
-    .filter(i => b.troops[i] && b.troops[i].status === "ready");
+    .filter(i => i >= 0 && i < from.troopSlots.length)
+    .filter(i => from.troopSlots[i] && from.troopSlots[i].status === "ready");
 
   if (picked.length === 0) {
     log("Nenhuma tropa pronta selecionada para mover.", "warn");
     return;
   }
 
-  // origem (MVP: mesma origem)
-  const origin = b.troops[picked[0]].nodeId ?? state.world.baseNodeId;
-  for (const i of picked) {
-    const t = b.troops[i];
-    if ((t.nodeId ?? state.world.baseNodeId) !== origin) {
-      log("As tropas selecionadas estão em locais diferentes. Selecione tropas do mesmo território.", "warn");
-      return;
-    }
-  }
-
-  // calcula path e steps
-  const path = shortestPathBFS(origin, m.order.toId);
+  const path = shortestPathBFS(m.order.fromId, m.order.toId);
   if (!path) {
     log("Destino não alcançável (sem caminho).", "warn");
     return;
@@ -593,45 +553,38 @@ function confirmMoveOrder() {
   }
 
   const dest = nodeById(m.order.toId);
-  if (!dest) {
-    log("Destino inválido.", "warn");
-    return;
-  }
-
+  if (!dest) return;
   ensureNodeTroopSlots(dest);
 
-  // capacidade real do destino = slots vazios (não usamos mais incomingReserved/queued)
+  // slots livres no destino
   const freeIdxs = [];
-  for (let s = 0; s < dest.troopSlots.length; s++) {
-    if (!dest.troopSlots[s]) freeIdxs.push(s);
+  for (let i = 0; i < dest.troopSlots.length; i++) {
+    if (!dest.troopSlots[i]) freeIdxs.push(i);
   }
 
   if (picked.length > freeIdxs.length) {
-    log(
-      `Sem slots suficientes no destino. Tentando mover ${picked.length}, mas há apenas ${freeIdxs.length} slot(s) livre(s) (capacidade ${dest.troopSlots.length}).`,
-      "warn"
-    );
+    const sum = getNodeTroopSummary(dest);
+    log(`Sem slots suficientes no destino. Destino tem ${sum.cap} slots: ocupados=${sum.ready + sum.moving}, livres=${sum.free}.`, "warn");
     return;
   }
 
-  // DESPACHO IMEDIATO:
-  // 1) ocupa destino com moving+eta
-  // 2) libera slot do quartel agora
+  // Regra nova: ao clicar CONFIRMAR, as tropas já “saem” da origem
+  // e ocupam o destino como MOVING (ETA = steps).
   for (let k = 0; k < picked.length; k++) {
-    const troopIdx = picked[k];
-    const t = b.troops[troopIdx];
+    const fromIdx = picked[k];
+    const t = from.troopSlots[fromIdx];
+    const toIdx = freeIdxs[k];
 
-    const slotDest = freeIdxs[k];
-    dest.troopSlots[slotDest] = {
+    dest.troopSlots[toIdx] = {
       type: t.type,
       status: "moving",
-      eta: steps
+      eta: steps,
     };
 
-    b.troops[troopIdx] = null; // libera imediatamente
+    from.troopSlots[fromIdx] = null;
   }
 
-  log(`Movimento iniciado: ${picked.length} tropa(s) enviadas ao Nó ${dest.id} — chegam em ${steps} dia(s).`, "good");
+  log(`Movimento iniciado: ${picked.length} tropa(s) saíram agora e chegarão em ${steps} dia(s) no Nó ${dest.id}.`, "good");
 
   exitMoveMode();
   updateHUD();
@@ -768,7 +721,7 @@ function setSelectionInfo() {
 
   if (baseSelected) {
     el.selectionInfo.className = "card small";
-    el.selectionInfo.innerHTML = `<b>Base (Castelo)</b><div class="muted">Selecione um slot para construir.</div>`;
+    el.selectionInfo.innerHTML = `<b>Base (Castelo)</b><div class="muted">Aqui ficam os <b>slots de tropas</b> e a ação <b>MOVER</b>. Para treinar tropas, clique no <b>Quartel</b> (quando construído).</div>`;
     return;
   }
 
@@ -861,6 +814,95 @@ function setBuildPanel() {
   // 2) Se slot selecionado -> construir OU (se quartel) gerenciar tropas
   const slotIdx = state.selection.slotIdx;
   if (slotIdx == null) {
+    // Clique no castelo (centro) -> Painel de tropas + MOVER
+    if (state.selection.baseSelected) {
+      const baseNode = nodeById(state.world.baseNodeId);
+      ensureNodeTroopSlots(baseNode);
+
+      const m = state.ui.move;
+      const isMoveHere = !!(m?.active && m.fromNodeId === baseNode.id);
+      const selectedCount = (isMoveHere && m.selectedSlots instanceof Set) ? m.selectedSlots.size : 0;
+
+      // slots
+      const rows = [];
+      for (let i = 0; i < baseNode.troopSlots.length; i++) {
+        const troop = baseNode.troopSlots[i];
+
+        if (!troop) {
+          rows.push(`<div class="muted" style="padding:8px 10px; border:2px solid transparent; border-radius:10px; background: rgba(255,255,255,0.04);">Slot ${i + 1}: (vazio)</div>`);
+          continue;
+        }
+
+        const tdef = CFG.troops[troop.type];
+
+        if (troop.status === "training") {
+          rows.push(`<div class="muted" style="padding:8px 10px; border:2px solid transparent; border-radius:10px; background: rgba(255,255,255,0.04);">Slot ${i + 1}: ${tdef.icon} ${tdef.name} — treinando (${troop.remainingTurns}T)</div>`);
+          continue;
+        }
+
+        if (troop.status === "moving") {
+          rows.push(`<div class="muted" style="padding:8px 10px; border:2px solid transparent; border-radius:10px; background: rgba(255,255,255,0.04);">Slot ${i + 1}: ${tdef.icon} ${tdef.name} — chegando em ${troop.eta} dia(s)</div>`);
+          continue;
+        }
+
+        // pronta
+        if (isMoveHere) {
+          const sel = m.selectedSlots instanceof Set && m.selectedSlots.has(i);
+          rows.push(`
+            <button class="btn wide" data-move-toggle="${i}"
+              style="border: 2px solid ${sel ? "green" : "transparent"}; background: rgba(255,255,255,0.06);">
+              Slot ${i + 1}: ${tdef.icon} ${tdef.name} — pronta
+            </button>
+          `);
+        } else {
+          rows.push(`<div style="padding:8px 10px; border:1px solid rgba(255,255,255,.12); border-radius:10px;">Slot ${i + 1}: ${tdef.icon} ${tdef.name} — pronta</div>`);
+        }
+      }
+
+      // botões de mover
+      let moveUI = "";
+      if (isMoveHere) {
+        if (m.order) {
+          const o = m.order;
+          moveUI = `
+            <div style="height:8px"></div>
+            <div class="muted">Origem: <b>${o.fromId}</b> • Destino: <b>${o.toId}</b> • Distância: <b>${o.steps}</b> dia(s)</div>
+            <div style="height:10px"></div>
+            <button class="btn wide primary" data-action="confirm-move">CONFIRMAR MOVIMENTO</button>
+            <div style="height:10px"></div>
+            <button class="btn wide" data-action="cancel-move">Cancelar</button>
+          `;
+        } else {
+          moveUI = `
+            <div style="height:8px"></div>
+            <div class="muted">Clique em um nó no mapa para definir o destino.</div>
+            <div style="height:10px"></div>
+            <button class="btn wide" data-action="cancel-move">Cancelar</button>
+          `;
+        }
+      } else {
+        const ready = getNodeTroopSummary(baseNode).ready;
+        const dis = ready > 0 ? "" : "disabled";
+        moveUI = `
+          <div style="height:10px"></div>
+          <button class="btn wide primary ${dis ? "disabled" : ""}" data-action="move" ${dis}>MOVER</button>
+          <div style="height:8px"></div>
+          <div class="muted">Tropas prontas: <b>${ready}</b> • Selecionadas (no mover): <b>${selectedCount}</b></div>
+        `;
+      }
+
+      el.buildPanel.className = "card small";
+      el.buildPanel.innerHTML = `
+        <b>Base (Tropas)</b>
+        <div class="muted">Slots de tropas: ${baseNode.troopSlots.length}</div>
+        ${moveUI}
+        <div style="height:12px"></div>
+        ${rows.join("<div style='height:8px'></div>")}
+      `;
+      return;
+    }
+
+    // Sem seleção relevante
     el.buildPanel.className = "card small muted";
     el.buildPanel.textContent = "Selecione um slot ao redor do castelo para construir.";
     return;
@@ -882,55 +924,23 @@ function setBuildPanel() {
       return;
     }
 
-    const cap = ensureTroopArray(b);
+    // Quartel agora NÃO guarda tropas. Ele apenas habilita/mostra o treino
+    // nos slots de tropas da BASE (os mesmos slots vistos ao clicar no castelo).
+    const baseNode = nodeById(state.world.baseNodeId);
+    ensureNodeTroopSlots(baseNode);
 
-    const isMoveHere = state.ui.move?.active && state.ui.move.barracksSlotIdx === slotIdx;
-    const selectedCount = (isMoveHere && state.ui.move.selectedSlots instanceof Set)
-      ? state.ui.move.selectedSlots.size
-      : 0;
+    const cap = baseNode.troopSlots.length;
 
-    let orderUI = "";
-    if (isMoveHere) {
-      if (state.ui.move.order) {
-        const o = state.ui.move.order;
-        orderUI = `
-          <div style="height:8px"></div>
-          <div class="muted">Origem: <b>${o.fromId}</b> • Destino: <b>${o.toId}</b> • Distância: <b>${o.steps}</b> dia(s)</div>
-          <div style="height:10px"></div>
-          <button class="btn wide primary" data-action="confirm-move">CONFIRMAR MOVIMENTO</button>
-        `;
-      } else {
-        orderUI = `
-          <div style="height:8px"></div>
-          <div class="muted">Clique em um nó no mapa para definir o destino.</div>
-        `;
-      }
-    }
-
-    const moveHeader = isMoveHere
-      ? `
-        <div style="height:10px"></div>
-        <div class="muted">Modo MOVER ativo — selecione/deselecione as tropas prontas.</div>
-        <div class="muted">Selecionadas: <b>${selectedCount}</b></div>
-        ${orderUI}
-        <div style="height:10px"></div>
-        <button class="btn wide" data-action="cancel-move">Sair do MOVER</button>
-      `
-      : `
-        <div style="height:10px"></div>
-        <button class="btn wide primary" data-action="move">MOVER</button>
-      `;
+    const popCap = (typeof getPopulationCap === "function") ? getPopulationCap() : null;
+    const popUsed = (typeof getPopulationUsed === "function") ? getPopulationUsed() : null;
+    const popTxt = (popCap != null && popUsed != null) ? ` • População: <b>${popUsed}</b>/<b>${popCap}</b>` : "";
 
     const rows = [];
     for (let i = 0; i < cap; i++) {
-      const troop = b.troops[i];
+      const troop = baseNode.troopSlots[i];
 
       if (!troop) {
-        if (isMoveHere) {
-          rows.push(`<div class="muted" style="padding:8px 10px; border:2px solid transparent; border-radius:10px; background: rgba(255,255,255,0.04);">Slot ${i + 1}: (vazio)</div>`);
-        } else {
-          rows.push(`<button class="btn wide" data-troop-pick="${i}">Slot ${i + 1}: (vazio) — clicar para treinar</button>`);
-        }
+        rows.push(`<button class="btn wide" data-troop-pick="${i}">Slot ${i + 1}: (vazio) — clicar para treinar</button>`);
         continue;
       }
 
@@ -941,31 +951,19 @@ function setBuildPanel() {
         continue;
       }
 
-      if (troop.status === "moving" && troop.move) {
-        const remaining = Math.max(0, troop.move.path.length - troop.move.next);
-        rows.push(`<div class="muted" style="padding:8px 10px; border:2px solid transparent; border-radius:10px; background: rgba(255,255,255,0.04);">Slot ${i + 1}: ${tdef.icon} ${tdef.name} — em movimento (${remaining} dia(s)) • em Nó ${troop.nodeId}</div>`);
+      if (troop.status === "moving") {
+        rows.push(`<div class="muted" style="padding:8px 10px; border:2px solid transparent; border-radius:10px; background: rgba(255,255,255,0.04);">Slot ${i + 1}: ${tdef.icon} ${tdef.name} — chegando em ${troop.eta} dia(s)</div>`);
         continue;
       }
 
-      // pronta
-      if (isMoveHere) {
-        const sel = state.ui.move.selectedSlots instanceof Set && state.ui.move.selectedSlots.has(i);
-        rows.push(`
-          <button class="btn wide" data-move-toggle="${i}"
-            style="border: 2px solid ${sel ? "green" : "transparent"}; background: rgba(255,255,255,0.06);">
-            Slot ${i + 1}: ${tdef.icon} ${tdef.name} — pronta • em Nó ${troop.nodeId}
-          </button>
-        `);
-      } else {
-        rows.push(`<div style="padding:8px 10px; border:1px solid rgba(255,255,255,.12); border-radius:10px;">Slot ${i + 1}: ${tdef.icon} ${tdef.name} — pronta • em Nó ${troop.nodeId}</div>`);
-      }
+      rows.push(`<div style="padding:8px 10px; border:1px solid rgba(255,255,255,.12); border-radius:10px;">Slot ${i + 1}: ${tdef.icon} ${tdef.name} — pronta</div>`);
     }
 
-    // treino: só fora do modo mover
-    const pick = (!isMoveHere) ? state.ui.trainPick : null;
+    // treino
+    const pick = state.ui.trainPick;
     let pickUI = "";
 
-    if (pick != null && b.troops[pick] == null) {
+    if (pick != null && baseNode.troopSlots[pick] == null) {
       const w = CFG.troops.WARRIOR;
       const a = CFG.troops.ARCHER;
 
@@ -992,9 +990,7 @@ function setBuildPanel() {
 
     el.buildPanel.innerHTML = `
       <b>Quartel</b>
-      <div class="muted">Slots de tropas: ${cap} (fixo)</div>
-      <div class="muted">População: ${getPopulationUsed()}/${getPopulationCap()}</div>
-      ${moveHeader}
+      <div class="muted">Treine tropas usando os slots da Base (3 slots fixos).${popTxt}</div>
       <div style="height:12px"></div>
       ${rows.join("<div style='height:8px'></div>")}
       ${pickUI}
@@ -1097,7 +1093,7 @@ function endTurn() {
     }
   }
 
-  // 2) produção
+  // 2) produção (por enquanto só da base principal)
   let addW = 0, addS = 0, addM = 0;
   for (const slot of state.base.slots) {
     const b = slot.building;
@@ -1115,52 +1111,52 @@ function endTurn() {
   if (addW || addS || addM) log(`Produção do turno: +${addW} Madeira, +${addS} Pedra, +${addM} Carne.`, "");
   else log("Sem produção (construa estruturas de recurso).", "warn");
 
-  // 3) treino de tropas (Quartel)
-  for (const slot of state.base.slots) {
-    const b = slot.building;
-    if (!b || b.type !== "BARRACKS" || !b.built) continue;
+  // 3) treino de tropas (agora nos slots da BASE; o Quartel só habilita treinar)
+  const hasBarracks = state.base.slots.some(s => s.building && s.building.type === "BARRACKS" && s.building.built);
+  if (hasBarracks) {
+    const baseNode = nodeById(state.world.baseNodeId);
+    ensureNodeTroopSlots(baseNode);
 
-    const cap = ensureTroopArray(b);
-    for (let i = 0; i < cap; i++) {
-      const t = b.troops[i];
+    for (let i = 0; i < baseNode.troopSlots.length; i++) {
+      const t = baseNode.troopSlots[i];
       if (!t || t.status !== "training") continue;
 
       t.remainingTurns -= 1;
       if (t.remainingTurns <= 0) {
         t.status = "ready";
         t.remainingTurns = 0;
-        t.nodeId = state.world.baseNodeId; // em casa
-        const tdef = CFG.troops[t.type];
-        log(`Tropa pronta no Quartel: ${tdef.icon} ${tdef.name}.`, "good");
+        const def = CFG.troops[t.type];
+        log(`Treino concluído: ${def.name} (Slot ${i + 1}).`, "good");
       }
     }
   }
 
-  // 4) progresso de tropas que já estão nos NÓS (em movimento)
-  // (fazemos isso ANTES do despacho, para as novas saírem com ETA cheio)
+  // 4) progresso de movimento (ETA) em TODOS os nós (inclusive BASE)
   for (const n of state.world.nodes.values()) {
-    if (n.kind === "BASE") continue;
-    ensureNodeTroopSlots(n);
+    if (n.kind === "BASE") {
+      ensureNodeTroopSlots(n);
+    } else if (n.kind !== "MONSTER" && n.kind !== "OWNED") {
+      continue;
+    } else {
+      ensureNodeTroopSlots(n);
+    }
 
-    let arrived = 0;
-
-    for (let s = 0; s < n.troopSlots.length; s++) {
-      const t = n.troopSlots[s];
+    for (let i = 0; i < n.troopSlots.length; i++) {
+      const t = n.troopSlots[i];
       if (!t || t.status !== "moving") continue;
 
       t.eta -= 1;
+
       if (t.eta <= 0) {
         t.status = "ready";
         t.eta = 0;
-        arrived++;
+        const def = CFG.troops[t.type];
+        log(`Tropa chegou e está pronta: ${def.name} (Nó ${n.id}).`, "good");
       }
-    }
-
-    if (arrived > 0) {
-      log(`Tropas chegaram ao Nó ${n.id}: ${arrived}.`, "good");
     }
   }
 
+  // 5) finaliza turno
   updateHUD();
 }
 
@@ -1297,24 +1293,22 @@ canvas.addEventListener("wheel", (e) => {
 el.buildPanel.addEventListener("click", (e) => {
   if (!state) return;
 
-  // 0) toggle de seleção de tropas no modo mover
+  // 0) toggle de seleção de tropas no modo mover (agora por NÓ, não por Quartel)
   const mv = e.target.closest("button[data-move-toggle]");
   if (mv) {
     const idx = Number(mv.getAttribute("data-move-toggle"));
     const m = state.ui.move;
 
-    if (!m?.active || m.barracksSlotIdx == null) return;
+    if (!m?.active || m.fromNodeId == null) return;
 
-    const slot = state.base.slots[m.barracksSlotIdx];
-    const b = slot?.building;
-    if (!b || b.type !== "BARRACKS" || !b.built) return;
-
-    const cap = ensureTroopArray(b);
+    const from = nodeById(m.fromNodeId);
+    if (!from) return;
+    ensureNodeTroopSlots(from);
 
     if (!(m.selectedSlots instanceof Set)) m.selectedSlots = new Set();
 
-    if (idx < 0 || idx >= cap) return;
-    const t = b.troops[idx];
+    if (idx < 0 || idx >= from.troopSlots.length) return;
+    const t = from.troopSlots[idx];
     if (!t || t.status !== "ready") return;
 
     if (m.selectedSlots.has(idx)) m.selectedSlots.delete(idx);
@@ -1337,11 +1331,10 @@ el.buildPanel.addEventListener("click", (e) => {
     }
 
     if (a === "move") {
-      const sidx = state.selection.slotIdx;
-      if (sidx == null) return;
-      const b = state.base.slots[sidx]?.building;
-      if (!b || b.type !== "BARRACKS" || !b.built) return;
-      enterMoveMode(sidx);
+      // Agora: MOVER fica na BASE central (e futuramente nas sub-bases).
+      if (state.selection.baseSelected && state.selection.slotIdx == null && state.selection.nodeId == null) {
+        enterMoveMode(state.world.baseNodeId);
+      }
     }
 
     if (a === "confirm-move") {
@@ -1401,7 +1394,7 @@ function startNewGame() {
     world: null,
     ui: {
       trainPick: null,
-      move: { active: false, barracksSlotIdx: null }, // <- novo (Parte 5)
+      move: { active: false, fromNodeId: null, selectedSlots: null, order: null },
     },
   };
 
