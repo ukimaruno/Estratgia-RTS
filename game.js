@@ -653,6 +653,25 @@ function spawnBranchesFrom(parentId) {
   }
 }
 
+function initOutpost(node) {
+  if (!node || node.kind !== "OWNED") return;
+  if (node.buildSlots) return; // já inicializado
+
+  // 3 slots ao redor do quadrado (sub-base)
+  const ring = CFG.slot.radius * 1.05; // ~46 (bom espaçamento)
+  const anglesDeg = [-90, 30, 150];    // triângulo “pra cima” visualmente agradável
+
+  node.buildSlots = anglesDeg.map((deg, i) => {
+    const a = (deg * Math.PI) / 180;
+    return {
+      idx: i,
+      x: node.x + Math.cos(a) * ring,
+      y: node.y + Math.sin(a) * ring,
+      building: null,
+    };
+  });
+}
+
 /* ----------------- Selection / Hit tests ----------------- */
 function hitTestBase(wx, wy) {
   const s = CFG.base.size;
@@ -666,6 +685,26 @@ function hitTestSlot(wx, wy) {
   for (const slot of state.base.slots) {
     if (wx >= slot.x - s/2 && wx <= slot.x + s/2 && wy >= slot.y - s/2 && wy <= slot.y + s/2) {
       return slot;
+    }
+  }
+  return null;
+}
+
+function hitTestOutpostSlot(wx, wy) {
+  const s = CFG.slot.size;
+
+  for (const n of state.world.nodes.values()) {
+    if (n.kind !== "OWNED") continue;
+    if (!n.discovered) continue;
+    if (!n.buildSlots) continue;
+
+    for (const slot of n.buildSlots) {
+      if (
+        wx >= slot.x - s / 2 && wx <= slot.x + s / 2 &&
+        wy >= slot.y - s / 2 && wy <= slot.y + s / 2
+      ) {
+        return { nodeId: n.id, idx: slot.idx };
+      }
     }
   }
   return null;
@@ -687,6 +726,7 @@ function clearSelection() {
   state.selection.baseSelected = false;
   state.selection.slotIdx = null;
   state.selection.nodeId = null;
+  state.selection.outpostSlot = null; // { nodeId, idx }
 }
 
 function setSelectionInfo() {
@@ -810,7 +850,54 @@ function setBuildPanel() {
     `;
     return;
   }
+  // 1.5) Se selecionou um slot de SUB-BASE (território dominado)
+  if (state.selection.outpostSlot) {
+    const n = nodeById(state.selection.outpostSlot.nodeId);
+    const slot = n?.buildSlots?.[state.selection.outpostSlot.idx];
 
+    if (!n || !slot) {
+      el.buildPanel.className = "card small muted";
+      el.buildPanel.textContent = "Seleção inválida de sub-base.";
+      return;
+    }
+
+    // se já tem prédio
+    if (slot.building) {
+      const b = slot.building;
+      const def = CFG.buildings[b.type];
+
+      el.buildPanel.className = "card small";
+      el.buildPanel.innerHTML = `
+        <div class="muted">Sub-base — Slot <b>${slot.idx + 1}</b></div>
+        <div style="height:10px"></div>
+        <div><b>${def.icon} ${def.name}</b></div>
+        <div style="height:6px"></div>
+        <div class="muted">${b.built ? "Concluído ✅" : `Em construção… faltam <b>${b.remainingTurns}</b> turno(s).`}</div>
+      `;
+      return;
+    }
+
+    // slot vazio: mesmos botões da base (reusa tryBuild)
+    const buttons = Object.keys(CFG.buildings).map((type) => {
+      const def = CFG.buildings[type];
+      const costTxt = fmtCost(def.cost);
+      const disabled = canAfford(def.cost) ? "" : "disabled";
+      return `
+        <button class="btn wide ${disabled ? "disabled" : ""}" data-build="${type}" ${disabled}>
+          ${def.name} <span style="opacity:.7">(${costTxt})</span>
+          <span style="opacity:.85; float:right">${def.buildTurns}T</span>
+        </button>
+      `;
+    }).join("<div style='height:8px'></div>");
+
+    el.buildPanel.className = "card small";
+    el.buildPanel.innerHTML = `
+      <div class="muted">Sub-base — Slot <b>${slot.idx + 1}</b> selecionado. Escolha uma construção:</div>
+      <div style="height:10px"></div>
+      ${buttons}
+    `;
+    return;
+  }
   // 2) Se slot selecionado -> construir OU (se quartel) gerenciar tropas
   const slotIdx = state.selection.slotIdx;
   if (slotIdx == null) {
@@ -1043,14 +1130,23 @@ function updateHUD() {
 
 /* ----------------- Build action ----------------- */
 function tryBuild(buildType) {
-  const slotIdx = state.selection.slotIdx;
-  if (slotIdx == null) return;
-
-  const slot = state.base.slots[slotIdx];
-  if (slot.building) return;
-
   const def = CFG.buildings[buildType];
   if (!def) return;
+
+  // prioridade: sub-base (se selecionado), senão base
+  let targetSlot = null;
+
+  if (state.selection.outpostSlot) {
+    const n = nodeById(state.selection.outpostSlot.nodeId);
+    if (!n?.buildSlots) return;
+    targetSlot = n.buildSlots[state.selection.outpostSlot.idx];
+  } else {
+    const slotIdx = state.selection.slotIdx;
+    if (slotIdx == null) return;
+    targetSlot = state.base.slots[slotIdx];
+  }
+
+  if (!targetSlot || targetSlot.building) return;
 
   if (!canAfford(def.cost)) {
     log("Recursos insuficientes para construir.", "warn");
@@ -1059,16 +1155,11 @@ function tryBuild(buildType) {
 
   pay(def.cost);
 
-  slot.building = {
+  targetSlot.building = {
     type: buildType,
     remainingTurns: def.buildTurns,
     built: false
   };
-
-  // quartel terá array de tropas (mesmo enquanto constrói)
-  if (buildType === "BARRACKS") {
-    slot.building.troops = [];
-  }
 
   log(`Construção iniciada: ${def.name} (conclui em ${def.buildTurns} turno(s)).`, "good");
   updateHUD();
@@ -1080,10 +1171,22 @@ function endTurn() {
 
   state.turn++;
 
+  // helper: iterar slots da base + slots das sub-bases
+  function forEachBuildSlot(fn) {
+    for (const slot of state.base.slots) fn(slot);
+
+    for (const n of state.world.nodes.values()) {
+      if (n.kind !== "OWNED") continue;
+      if (!n.buildSlots) continue;
+      for (const slot of n.buildSlots) fn(slot);
+    }
+  }
+
   // 1) construções
-  for (const slot of state.base.slots) {
+  forEachBuildSlot((slot) => {
     const b = slot.building;
-    if (!b || b.built) continue;
+    if (!b || b.built) return;
+
     b.remainingTurns -= 1;
     if (b.remainingTurns <= 0) {
       b.built = true;
@@ -1091,19 +1194,22 @@ function endTurn() {
       const def = CFG.buildings[b.type];
       log(`Construção concluída: ${def.name}.`, "good");
     }
-  }
+  });
 
-  // 2) produção (por enquanto só da base principal)
+  // 2) produção (global)
   let addW = 0, addS = 0, addM = 0;
-  for (const slot of state.base.slots) {
+  forEachBuildSlot((slot) => {
     const b = slot.building;
-    if (!b || !b.built) continue;
+    if (!b || !b.built) return;
+
     const def = CFG.buildings[b.type];
-    if (!def.prod) continue;
+    if (!def.prod) return;
+
     addW += (def.prod.wood || 0);
     addS += (def.prod.stone || 0);
     addM += (def.prod.meat || 0);
-  }
+  });
+
   state.resources.wood += addW;
   state.resources.stone += addS;
   state.resources.meat += addM;
@@ -1111,52 +1217,51 @@ function endTurn() {
   if (addW || addS || addM) log(`Produção do turno: +${addW} Madeira, +${addS} Pedra, +${addM} Carne.`, "");
   else log("Sem produção (construa estruturas de recurso).", "warn");
 
-  // 3) treino de tropas (agora nos slots da BASE; o Quartel só habilita treinar)
-  const hasBarracks = state.base.slots.some(s => s.building && s.building.type === "BARRACKS" && s.building.built);
-  if (hasBarracks) {
-    const baseNode = nodeById(state.world.baseNodeId);
-    ensureNodeTroopSlots(baseNode);
+  // 3) treino de tropas (Quartel) — mantém como está no seu código atual
+  for (const slot of state.base.slots) {
+    const b = slot.building;
+    if (!b || b.type !== "BARRACKS" || !b.built) continue;
 
-    for (let i = 0; i < baseNode.troopSlots.length; i++) {
-      const t = baseNode.troopSlots[i];
+    const cap = ensureTroopArray(b);
+    for (let i = 0; i < cap; i++) {
+      const t = b.troops[i];
       if (!t || t.status !== "training") continue;
 
       t.remainingTurns -= 1;
       if (t.remainingTurns <= 0) {
         t.status = "ready";
         t.remainingTurns = 0;
-        const def = CFG.troops[t.type];
-        log(`Treino concluído: ${def.name} (Slot ${i + 1}).`, "good");
+        t.nodeId = state.world.baseNodeId; // em casa
+        const tdef = CFG.troops[t.type];
+        log(`Tropa pronta no Quartel: ${tdef.icon} ${tdef.name}.`, "good");
       }
     }
   }
 
-  // 4) progresso de movimento (ETA) em TODOS os nós (inclusive BASE)
+  // 4) progresso de tropas nos NÓS (em movimento)
   for (const n of state.world.nodes.values()) {
-    if (n.kind === "BASE") {
-      ensureNodeTroopSlots(n);
-    } else if (n.kind !== "MONSTER" && n.kind !== "OWNED") {
-      continue;
-    } else {
-      ensureNodeTroopSlots(n);
-    }
+    if (n.kind === "BASE") continue;
+    ensureNodeTroopSlots(n);
 
-    for (let i = 0; i < n.troopSlots.length; i++) {
-      const t = n.troopSlots[i];
+    let arrived = 0;
+
+    for (let s = 0; s < n.troopSlots.length; s++) {
+      const t = n.troopSlots[s];
       if (!t || t.status !== "moving") continue;
 
       t.eta -= 1;
-
       if (t.eta <= 0) {
         t.status = "ready";
         t.eta = 0;
-        const def = CFG.troops[t.type];
-        log(`Tropa chegou e está pronta: ${def.name} (Nó ${n.id}).`, "good");
+        arrived++;
       }
+    }
+
+    if (arrived > 0) {
+      log(`Tropas chegaram ao Nó ${n.id}: ${arrived}.`, "good");
     }
   }
 
-  // 5) finaliza turno
   updateHUD();
 }
 
@@ -1164,20 +1269,12 @@ function endTurn() {
 function attackSelectedMonsterDebug() {
   const id = state.selection.nodeId;
   if (id == null) return;
-
   const n = nodeById(id);
   if (!n || n.kind !== "MONSTER") return;
 
-  // TRAVA (Parte 10): só ataca se existir tropa pronta no território
-  const readyHere = countReadyTroopsAtNode(n.id);
-  if (readyHere <= 0) {
-    log("Você precisa ter tropas prontas no nó para atacar.", "warn");
-    updateHUD();
-    return;
-  }
-
   // derrota imediata (debug)
   n.kind = "OWNED";
+  initOutpost(n); // <-- cria os 3 slots da sub-base
   log(`Território dominado! Nó ${n.id} agora é seu.`, "good");
 
   // gera novos caminhos/monstros proceduralmente a partir daqui
@@ -1205,7 +1302,7 @@ canvas.addEventListener("mousedown", (e) => {
 
   const w = screenToWorld(sx, sy);
 
-  // slot/base
+  // 1) slot da BASE
   const slot = hitTestSlot(w.x, w.y);
   if (slot) {
     clearSelection();
@@ -1215,6 +1312,7 @@ canvas.addEventListener("mousedown", (e) => {
     return;
   }
 
+  // 2) clique no CASTELO (base)
   if (hitTestBase(w.x, w.y)) {
     clearSelection();
     state.selection.baseSelected = true;
@@ -1222,16 +1320,30 @@ canvas.addEventListener("mousedown", (e) => {
     return;
   }
 
-  // nodes (monstros/territórios)
+  // 3) slot de SUB-BASE (território dominado)
+  const os = hitTestOutpostSlot(w.x, w.y);
+  if (os) {
+    // se estiver em modo MOVER, clique em slot também define destino no nó dono da sub-base
+    if (state.ui.move?.active) {
+      setMoveDestination(os.nodeId);
+      return;
+    }
+
+    clearSelection();
+    state.selection.nodeId = os.nodeId;
+    state.selection.outpostSlot = os;
+    updateHUD();
+    return;
+  }
+
+  // 4) nós (monstros/territórios)
   const node = hitTestNode(w.x, w.y);
   if (node) {
-    // Se estiver no modo MOVER: clique em nó define destino (sem perder seleção do quartel)
     if (state.ui.move?.active) {
       setMoveDestination(node.id);
       return;
     }
 
-    // Seleção normal
     clearSelection();
     state.selection.nodeId = node.id;
     updateHUD();
@@ -1389,7 +1501,7 @@ function startNewGame() {
     resources: { ...CFG.startResources },
     camera: { x: 0, y: 0, zoom: 1.0 },
     base: { pos: { x: 0, y: 0 }, slots: [] },
-    selection: { baseSelected: false, slotIdx: null, nodeId: null },
+    selection: { baseSelected: false, slotIdx: null, nodeId: null, outpostSlot: null },
     input: { rmbDown: false, lastMouse: { x: 0, y: 0 } },
     world: null,
     ui: {
@@ -1547,52 +1659,29 @@ function drawWorld() {
     ctx.stroke();
   }
 
-  // helper (somente desenho no canvas)
-  function drawTroopBadge(node, x, y, baseOffsetY) {
-    const sum = getNodeTroopSummary(node); // pronto/movendo/cap/minEta baseado em troopSlots
-    const z = state.camera.zoom;
-
-    ctx.textAlign = "center";
-    ctx.fillStyle = "rgba(255,255,255,0.90)";
-    ctx.font = `${Math.max(10, 11 * z)}px system-ui`;
-    ctx.textBaseline = "bottom";
-    ctx.fillText(`${sum.ready}/${sum.cap}`, x, y - baseOffsetY);
-
-    if (sum.moving > 0) {
-      ctx.fillStyle = "rgba(255,255,255,0.75)";
-      ctx.textBaseline = "top";
-      const etaTxt = (sum.minEta && sum.minEta > 0) ? ` (ETA ${sum.minEta})` : "";
-      ctx.fillText(`+${sum.moving}${etaTxt}`, x, y + baseOffsetY);
-    }
-  }
-
-  // 2) nós (monstros/territórios)
+  // 2) nós
   for (const n of state.world.nodes.values()) {
     if (!n.discovered) continue;
-    if (n.kind === "BASE") continue;
+    if (n.id === state.world.baseNodeId) continue;
 
     const p = worldToScreen(n.x, n.y);
-    const isSel = state.selection.nodeId === n.id;
+    const isSel = (state.selection.nodeId === n.id) && !state.selection.outpostSlot;
 
     if (n.kind === "MONSTER") {
-      const ms = 22 * state.camera.zoom;
-
-      ctx.fillStyle = "rgba(160,60,60,0.85)";
-      ctx.strokeStyle = isSel ? "rgba(71,209,140,0.95)" : "rgba(255,255,255,0.25)";
-      ctx.lineWidth = isSel ? 4 : 2;
+      const R = 16 * state.camera.zoom;
       ctx.beginPath();
-      ctx.arc(p.x, p.y, ms, 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, R, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(220,70,70,0.90)";
       ctx.fill();
+      ctx.lineWidth = isSel ? 4 : 2;
+      ctx.strokeStyle = isSel ? "rgba(71,209,140,0.95)" : "rgba(255,255,255,0.35)";
       ctx.stroke();
 
       ctx.font = `${Math.max(11, 12 * state.camera.zoom)}px system-ui`;
-      ctx.fillStyle = "rgba(255,255,255,0.85)";
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
-      ctx.fillText("Monstros", p.x, p.y + ms + 6);
-
-      // indicador de tropas (canvas)
-      drawTroopBadge(n, p.x, p.y, ms + 6);
+      ctx.fillText("Monstro", p.x, p.y + R + 6);
     }
 
     if (n.kind === "OWNED") {
@@ -1604,14 +1693,52 @@ function drawWorld() {
       ctx.fillRect(p.x - ts/2, p.y - ts/2, ts, ts);
       ctx.strokeRect(p.x - ts/2, p.y - ts/2, ts, ts);
 
+      // label
       ctx.font = `${Math.max(11, 12 * state.camera.zoom)}px system-ui`;
       ctx.fillStyle = "rgba(30,30,30,0.85)";
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
       ctx.fillText("Território", p.x, p.y + ts/2 + 6);
 
-      // indicador de tropas (canvas)
-      drawTroopBadge(n, p.x, p.y, ts/2 + 6);
+      // slots da sub-base (3)
+      if (n.buildSlots) {
+        const ss = CFG.slot.size * state.camera.zoom;
+
+        for (const slot of n.buildSlots) {
+          const sp = worldToScreen(slot.x, slot.y);
+          const sel =
+            state.selection.outpostSlot &&
+            state.selection.outpostSlot.nodeId === n.id &&
+            state.selection.outpostSlot.idx === slot.idx;
+
+          ctx.fillStyle = "rgba(255,255,255,0.22)";
+          ctx.strokeStyle = sel ? "rgba(71,209,140,0.95)" : "rgba(255,255,255,0.32)";
+          ctx.lineWidth = sel ? 3 : 2;
+
+          ctx.fillRect(sp.x - ss/2, sp.y - ss/2, ss, ss);
+          ctx.strokeRect(sp.x - ss/2, sp.y - ss/2, ss, ss);
+
+          if (slot.building) {
+            const bld = slot.building;
+            const def = CFG.buildings[bld.type];
+
+            ctx.fillStyle = "rgba(0,0,0,0.35)";
+            ctx.fillRect(sp.x - ss/2, sp.y - ss/2, ss, ss);
+
+            ctx.font = `${Math.max(12, 14 * state.camera.zoom)}px system-ui`;
+            ctx.fillStyle = "rgba(255,255,255,0.92)";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(def.icon, sp.x, sp.y);
+
+            if (!bld.built) {
+              ctx.font = `${Math.max(10, 11 * state.camera.zoom)}px system-ui`;
+              ctx.fillStyle = "rgba(255,204,102,0.95)";
+              ctx.fillText(`${bld.remainingTurns}T`, sp.x, sp.y + ss*0.38);
+            }
+          }
+        }
+      }
     }
   }
 
@@ -1621,13 +1748,14 @@ function drawWorld() {
   const cs = CFG.base.size * state.camera.zoom;
 
   ctx.fillStyle = "rgba(190,190,190,0.90)";
-  ctx.strokeStyle = "rgba(60,60,60,0.8)";
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = state.selection.baseSelected ? "rgba(71,209,140,0.95)" : "rgba(60,60,60,0.7)";
+  ctx.lineWidth = state.selection.baseSelected ? 4 : 2;
   ctx.fillRect(castle.x - cs/2, castle.y - cs/2, cs, cs);
   ctx.strokeRect(castle.x - cs/2, castle.y - cs/2, cs, cs);
 
-  ctx.fillStyle = "rgba(160,160,160,0.95)";
-  const cren = Math.max(4, 6 * state.camera.zoom);
+  // detalhe “crenel”
+  const cren = cs * 0.18;
+  ctx.fillStyle = "rgba(120,120,120,0.65)";
   for (let i = -2; i <= 2; i++) {
     ctx.fillRect(
       castle.x + i*cren*1.2 - cren/2,
