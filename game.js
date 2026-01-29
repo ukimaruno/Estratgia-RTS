@@ -1187,78 +1187,94 @@ function endTurn() {
     const b = slot.building;
     if (!b || b.built) return;
 
-    b.remainingTurns -= 1;
-    if (b.remainingTurns <= 0) {
+    b.turnsLeft -= 1;
+    if (b.turnsLeft <= 0) {
+      b.turnsLeft = 0;
       b.built = true;
-      b.remainingTurns = 0;
-      const def = CFG.buildings[b.type];
-      log(`Construção concluída: ${def.name}.`, "good");
+      log(`Construção concluída: ${CFG.buildings[b.type].icon} ${CFG.buildings[b.type].name}.`, "good");
     }
   });
 
-  // 2) produção (global)
-  let addW = 0, addS = 0, addM = 0;
+  // 2) produção por turno (global)
+  let prodWood = 0, prodStone = 0, prodMeat = 0;
+
   forEachBuildSlot((slot) => {
     const b = slot.building;
     if (!b || !b.built) return;
 
     const def = CFG.buildings[b.type];
-    if (!def.prod) return;
+    if (!def || !def.prod) return;
 
-    addW += (def.prod.wood || 0);
-    addS += (def.prod.stone || 0);
-    addM += (def.prod.meat || 0);
+    if (def.prod.wood) prodWood += def.prod.wood;
+    if (def.prod.stone) prodStone += def.prod.stone;
+    if (def.prod.meat) prodMeat += def.prod.meat;
   });
 
-  state.resources.wood += addW;
-  state.resources.stone += addS;
-  state.resources.meat += addM;
+  if (prodWood || prodStone || prodMeat) {
+    state.resources.wood += prodWood;
+    state.resources.stone += prodStone;
+    state.resources.meat += prodMeat;
+    log(`Produção do turno: +${prodWood} Madeira, +${prodStone} Pedra, +${prodMeat} Carne.`, "info");
+  }
 
-  if (addW || addS || addM) log(`Produção do turno: +${addW} Madeira, +${addS} Pedra, +${addM} Carne.`, "");
-  else log("Sem produção (construa estruturas de recurso).", "warn");
+  // 3) treino de tropas (AGORA: slots de tropas do NÓ — Base/Sub-base)
+  // Antes, o treino era salvo em b.troops (no prédio "Quartel").
+  // Agora, o treino é salvo em node.troopSlots (no nó do território).
+  // Então, o avanço por turno precisa decrementar node.troopSlots[].remainingTurns.
+  function hasBuiltBarracksInBase() {
+    return state.base.slots.some(s => s.building && s.building.type === "BARRACKS" && s.building.built);
+  }
 
-  // 3) treino de tropas (Quartel) — mantém como está no seu código atual
-  for (const slot of state.base.slots) {
-    const b = slot.building;
-    if (!b || b.type !== "BARRACKS" || !b.built) continue;
+  function hasBuiltBarracksInNode(n) {
+    return Array.isArray(n.buildSlots) && n.buildSlots.some(s => s.building && s.building.type === "BARRACKS" && s.building.built);
+  }
 
-    const cap = ensureTroopArray(b);
-    for (let i = 0; i < cap; i++) {
-      const t = b.troops[i];
+  function tickTrainingOnNode(n) {
+    ensureNodeTroopSlots(n);
+
+    for (let i = 0; i < n.troopSlots.length; i++) {
+      const t = n.troopSlots[i];
       if (!t || t.status !== "training") continue;
 
       t.remainingTurns -= 1;
       if (t.remainingTurns <= 0) {
         t.status = "ready";
         t.remainingTurns = 0;
-        t.nodeId = state.world.baseNodeId; // em casa
+
         const tdef = CFG.troops[t.type];
-        log(`Tropa pronta no Quartel: ${tdef.icon} ${tdef.name}.`, "good");
+        if (tdef) log(`Tropa pronta: ${tdef.icon} ${tdef.name} (Slot ${i + 1}).`, "good");
+        else log(`Tropa pronta (Slot ${i + 1}).`, "good");
       }
     }
   }
 
-  // 4) progresso de tropas nos NÓS (em movimento)
+  const baseNode = nodeById(state.world.baseNodeId);
+  if (baseNode && hasBuiltBarracksInBase()) {
+    tickTrainingOnNode(baseNode);
+  }
+
+  // (Já deixa pronto para sub-bases: se um nó OWNED tiver Quartel construído, o treino nele também avança.)
   for (const n of state.world.nodes.values()) {
-    if (n.kind === "BASE") continue;
-    ensureNodeTroopSlots(n);
+    if (n.kind !== "OWNED") continue;
+    if (!hasBuiltBarracksInNode(n)) continue;
+    tickTrainingOnNode(n);
+  }
 
-    let arrived = 0;
+  // 4) movimento de tropas já despachadas (eta por arestas)
+  for (const n of state.world.nodes.values()) {
+    if (!n.troopSlots) continue;
 
-    for (let s = 0; s < n.troopSlots.length; s++) {
-      const t = n.troopSlots[s];
+    for (let i = 0; i < n.troopSlots.length; i++) {
+      const t = n.troopSlots[i];
       if (!t || t.status !== "moving") continue;
 
       t.eta -= 1;
       if (t.eta <= 0) {
-        t.status = "ready";
         t.eta = 0;
-        arrived++;
+        t.status = "ready";
+        const tdef = CFG.troops[t.type];
+        log(`Tropa chegou: ${tdef ? tdef.icon + " " + tdef.name : t.type} em ${nodeLabel(n)}.`, "good");
       }
-    }
-
-    if (arrived > 0) {
-      log(`Tropas chegaram ao Nó ${n.id}: ${arrived}.`, "good");
     }
   }
 
