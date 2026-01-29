@@ -14,6 +14,7 @@ const el = {
   resWood: document.getElementById("resWood"),
   resStone: document.getElementById("resStone"),
   resMeat: document.getElementById("resMeat"),
+  resPop: document.getElementById("resPop"),
   turnNow: document.getElementById("turnNow"),
   selectionInfo: document.getElementById("selectionInfo"),
   buildPanel: document.getElementById("buildPanel"),
