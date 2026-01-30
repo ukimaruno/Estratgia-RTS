@@ -738,7 +738,9 @@ function setSelectionInfo() {
     if (n.kind === "MONSTER") {
       el.selectionInfo.innerHTML = `<b>Monstros</b><div class="muted">Nó ${n.id} — HP ${n.hp}. Selecione e clique em <b>Atacar (debug)</b>.</div>`;
     } else if (n.kind === "OWNED") {
-      el.selectionInfo.innerHTML = `<b>Território dominado</b><div class="muted">Nó ${n.id}. Em breve: construir fora da base.</div>`;
+      el.selectionInfo.innerHTML =
+         `<b>Território dominado</b>` +
+         `<div class="muted">Nó ${n.id}. Clique no <b>centro</b> para ver tropas/MOVER. Clique nos <b>slots ao redor</b> para construir.</div>`;
     } else {
       el.selectionInfo.innerHTML = `<b>Nó</b><div class="muted">${n.kind}</div>`;
     }
@@ -770,14 +772,67 @@ function setSelectionInfo() {
 }
 
 function setBuildPanel() {
-  // 1) Se selecionou monstro -> ações do nó
+  // 1.5) Se selecionou um slot de SUB-BASE (território dominado)  ✅ (PRIORIDADE)
+  if (state.selection.outpostSlot) {
+    const n = nodeById(state.selection.outpostSlot.nodeId);
+    const slot = n?.buildSlots?.[state.selection.outpostSlot.idx];
+
+    if (!n || !slot) {
+      el.buildPanel.className = "card small muted";
+      el.buildPanel.textContent = "Seleção inválida de sub-base.";
+      return;
+    }
+
+    // se já tem prédio
+    if (slot.building) {
+      const b = slot.building;
+      const def = CFG.buildings[b.type];
+
+      el.buildPanel.className = "card small";
+      el.buildPanel.innerHTML = `
+        <div class="muted">Sub-base — Slot <b>${slot.idx + 1}</b></div>
+        <div style="height:10px"></div>
+        <div><b>${def.icon} ${def.name}</b></div>
+        <div style="height:6px"></div>
+        <div class="muted">${
+          b.built ? "Concluído ✅" : `Em construção… faltam <b>${b.remainingTurns}</b> turno(s).`
+        }</div>
+      `;
+      return;
+    }
+
+    // slot vazio: mesmos botões da base (reusa tryBuild)
+    const buttons = Object.keys(CFG.buildings)
+      .map((type) => {
+        const def = CFG.buildings[type];
+        const costTxt = fmtCost(def.cost);
+        const disabled = canAfford(def.cost) ? "" : "disabled";
+        return `
+          <button class="btn wide ${disabled ? "disabled" : ""}" data-build="${type}" ${disabled}>
+            ${def.name} <span style="opacity:.7">(${costTxt})</span>
+            <span style="opacity:.85; float:right">${def.buildTurns}T</span>
+          </button>
+        `;
+      })
+      .join("<div style='height:8px'></div>");
+
+    el.buildPanel.className = "card small";
+    el.buildPanel.innerHTML = `
+      <div class="muted">Sub-base — Slot <b>${slot.idx + 1}</b> selecionado. Escolha uma construção:</div>
+      <div style="height:10px"></div>
+      ${buttons}
+    `;
+    return;
+  }
+
+  // 1) Se selecionou nó do mapa -> ações do nó (monstro) OU painel do território dominado ✅
   if (state.selection.nodeId != null) {
     const n = nodeById(state.selection.nodeId);
+    if (!n) return;
 
     if (n.kind === "MONSTER") {
       const readyHere = countReadyTroopsAtNode(n.id);
 
-      // (Opcional, mas recomendado) — feedback de tropas que já estão a caminho desse nó
       const incoming = incomingToNodeSummary(n.id);
       const etaLabel =
         incoming.count > 0
@@ -822,82 +877,117 @@ function setBuildPanel() {
       return;
     }
 
-    // Território já dominado (por enquanto sem ações além de info)
-    const readyHere = countReadyTroopsAtNode(n.id);
+    // ✅ OWNED: painel de tropas + MOVER (igual Base)
+    if (n.kind === "OWNED") {
+      ensureNodeTroopSlots(n);
 
-    const incoming = incomingToNodeSummary(n.id);
-    const etaLabel =
-      incoming.count > 0
-        ? (incoming.minEta === incoming.maxEta
-            ? `${incoming.minEta}`
-            : `${incoming.minEta}–${incoming.maxEta}`) + " dia(s)"
-        : "";
+      // contagens
+      let readyHere = 0;
+      for (const t of n.troopSlots) if (t && t.status === "ready") readyHere++;
 
-    const incomingLine =
-      incoming.count > 0
-        ? `<div class="muted">Chegando: <b>${incoming.count}</b> tropa(s) — ETA: ${etaLabel}.</div>`
-        : `<div class="muted">Chegando: <b>0</b> tropa(s).</div>`;
+      const incoming = incomingToNodeSummary(n.id);
+      const etaLabel =
+        incoming.count > 0
+          ? (incoming.minEta === incoming.maxEta
+              ? `${incoming.minEta}`
+              : `${incoming.minEta}–${incoming.maxEta}`) + " dia(s)"
+          : "";
+      const incomingLine =
+        incoming.count > 0
+          ? `<div class="muted">Chegando: <b>${incoming.count}</b> tropa(s) — ETA: ${etaLabel}.</div>`
+          : `<div class="muted">Chegando: <b>0</b> tropa(s).</div>`;
 
-    el.buildPanel.className = "card small";
-    el.buildPanel.innerHTML = `
-      <div class="muted">Território dominado.</div>
-      <div style="height:10px"></div>
-      <div class="muted">Tropas prontas no território: <b>${readyHere}</b></div>
-      <div style="height:6px"></div>
-      ${incomingLine}
-      <div style="height:10px"></div>
-      <div class="muted">Em breve: construir fora da base.</div>
-    `;
-    return;
-  }
-  // 1.5) Se selecionou um slot de SUB-BASE (território dominado)
-  if (state.selection.outpostSlot) {
-    const n = nodeById(state.selection.outpostSlot.nodeId);
-    const slot = n?.buildSlots?.[state.selection.outpostSlot.idx];
+      const m = state.ui.move;
+      const isMoveHere = !!(m && m.active && m.fromNodeId === n.id);
+      const selectedCount = isMoveHere && m.selectedSlots instanceof Set ? m.selectedSlots.size : 0;
 
-    if (!n || !slot) {
-      el.buildPanel.className = "card small muted";
-      el.buildPanel.textContent = "Seleção inválida de sub-base.";
-      return;
-    }
+      // lista de tropas do nó
+      let rows = "";
+      for (let i = 0; i < n.troopSlots.length; i++) {
+        const t = n.troopSlots[i];
+        const slotLabel = `Slot ${i + 1}`;
 
-    // se já tem prédio
-    if (slot.building) {
-      const b = slot.building;
-      const def = CFG.buildings[b.type];
+        if (!t) {
+          rows += `<div class="muted" style="padding:10px;border:1px solid rgba(255,255,255,12);border-radius:10px">${slotLabel}: vazio</div>`;
+          continue;
+        }
+
+        const def = CFG.troops?.[t.type] || { icon: "⚔️", name: t.type };
+        const label = `${def.icon} ${def.name}`;
+
+        if (t.status === "training") {
+          rows += `<div class="muted" style="padding:10px;border:1px solid rgba(255,255,255,12);border-radius:10px">${slotLabel}: ${label} — treinando (${t.remainingTurns ?? "?"}T)</div>`;
+          continue;
+        }
+
+        if (t.status === "moving") {
+          rows += `<div class="muted" style="padding:10px;border:1px solid rgba(255,255,255,12);border-radius:10px">${slotLabel}: ${label} — em deslocamento (ETA ${t.eta ?? "?"})</div>`;
+          continue;
+        }
+
+        // ready
+        if (isMoveHere) {
+          const picked = m.selectedSlots.has(i);
+          rows += `
+            <button class="btn wide ${picked ? "primary" : ""}" data-move-toggle="${i}">
+              ${slotLabel}: ${label} ${picked ? "✓" : ""}
+            </button>
+          `;
+        } else {
+          rows += `<div style="padding:10px;border:1px solid rgba(255,255,255,12);border-radius:10px">${slotLabel}: ${label} ✅</div>`;
+        }
+      }
+
+      let moveHeader = "";
+      if (isMoveHere) {
+        if (!m.order) {
+          moveHeader = `
+            <div class="muted"><b>MOVER</b> — selecionadas: <b>${selectedCount}</b></div>
+            <div class="muted">Clique em um destino no mapa (outro território ou a Base).</div>
+            <div style="height:10px"></div>
+            <button class="btn wide" data-action="cancel-move">Cancelar</button>
+          `;
+        } else {
+          moveHeader = `
+            <div class="muted"><b>MOVER</b> — selecionadas: <b>${selectedCount}</b></div>
+            <div class="muted">Origem: <b>${m.order.fromId}</b> → Destino: <b>${m.order.toId}</b> (ETA: ${m.order.eta})</div>
+            <div style="height:10px"></div>
+            <button class="btn wide primary" data-action="confirm-move">Confirmar</button>
+            <div style="height:8px"></div>
+            <button class="btn wide" data-action="cancel-move">Cancelar</button>
+          `;
+        }
+      } else {
+        const dis = readyHere > 0 ? "" : "disabled";
+        moveHeader = `
+          <div class="muted">Tropas prontas no território: <b>${readyHere}</b></div>
+          <div style="height:8px"></div>
+          <button class="btn wide ${dis ? "disabled" : ""}" data-action="move" ${dis}>MOVER</button>
+        `;
+      }
 
       el.buildPanel.className = "card small";
       el.buildPanel.innerHTML = `
-        <div class="muted">Sub-base — Slot <b>${slot.idx + 1}</b></div>
+        <b>Território dominado</b>
+        <div class="muted">Nó ${n.id} • Slots de tropas: ${n.troopSlots.length}</div>
         <div style="height:10px"></div>
-        <div><b>${def.icon} ${def.name}</b></div>
-        <div style="height:6px"></div>
-        <div class="muted">${b.built ? "Concluído ✅" : `Em construção… faltam <b>${b.remainingTurns}</b> turno(s).`}</div>
+        ${moveHeader}
+        <div style="height:10px"></div>
+        ${incomingLine}
+        <div style="height:12px"></div>
+        ${rows}
+        <div style="height:12px"></div>
+        <div class="muted">Para construir aqui: clique em um <b>slot ao redor</b> do território no mapa.</div>
       `;
       return;
     }
 
-    // slot vazio: mesmos botões da base (reusa tryBuild)
-    const buttons = Object.keys(CFG.buildings).map((type) => {
-      const def = CFG.buildings[type];
-      const costTxt = fmtCost(def.cost);
-      const disabled = canAfford(def.cost) ? "" : "disabled";
-      return `
-        <button class="btn wide ${disabled ? "disabled" : ""}" data-build="${type}" ${disabled}>
-          ${def.name} <span style="opacity:.7">(${costTxt})</span>
-          <span style="opacity:.85; float:right">${def.buildTurns}T</span>
-        </button>
-      `;
-    }).join("<div style='height:8px'></div>");
-
-    el.buildPanel.className = "card small";
-    el.buildPanel.innerHTML = `
-      <div class="muted">Sub-base — Slot <b>${slot.idx + 1}</b> selecionado. Escolha uma construção:</div>
-      <div style="height:10px"></div>
-      ${buttons}
-    `;
+    // fallback
+    el.buildPanel.className = "card small muted";
+    el.buildPanel.textContent = `Nó ${n.id}: ${n.kind}`;
     return;
   }
+
   // 2) Se slot selecionado -> construir OU (se quartel) gerenciar tropas
   const slotIdx = state.selection.slotIdx;
   if (slotIdx == null) {
@@ -1344,6 +1434,7 @@ canvas.addEventListener("mousedown", (e) => {
   // 1) slot da BASE
   const slot = hitTestSlot(w.x, w.y);
   if (slot) {
+    if (state.ui.move?.active) { setMoveDestination(state.world.baseNodeId); return; } // ✅ novo
     clearSelection();
     state.selection.baseSelected = true;
     state.selection.slotIdx = slot.idx;
@@ -1351,10 +1442,12 @@ canvas.addEventListener("mousedown", (e) => {
     return;
   }
 
-  // 2) clique no CASTELO (base)
+  // 2) clique no CASTELO (base) // clique no castelo (baseSelected)
   if (hitTestBase(w.x, w.y)) {
+    if (state.ui.move?.active) { setMoveDestination(state.world.baseNodeId); return; } // ✅ novo
     clearSelection();
     state.selection.baseSelected = true;
+    state.selection.slotIdx = null;
     updateHUD();
     return;
   }
@@ -1482,10 +1575,20 @@ el.buildPanel.addEventListener("click", (e) => {
     }
 
     if (a === "move") {
-      // Agora: MOVER fica na BASE central (e futuramente nas sub-bases).
+      // Base (castelo centro)
       if (state.selection.baseSelected && state.selection.slotIdx == null && state.selection.nodeId == null) {
         enterMoveMode(state.world.baseNodeId);
+        return;
       }
+
+      // Território dominado (centro do nó)
+      if (state.selection.nodeId != null && !state.selection.outpostSlot) {
+        const n = nodeById(state.selection.nodeId);
+        if (n && n.kind === "OWNED") {
+          enterMoveMode(n.id);
+        }
+      }
+      return;
     }
 
     if (a === "confirm-move") {
