@@ -38,8 +38,8 @@ const CFG = {
     BARRACKS: { name: "Quartel",     cost: { wood: 120, stone: 60, meat: 0 }, buildTurns: 2, prod: null,         icon: "🏹" },
   },
   troops: {
-    WARRIOR: { name: "Guerreiro", cost: { meat: 25 }, trainTurns: 1, icon: "🗡️" },
-    ARCHER:  { name: "Arqueiro",  cost: { meat: 30 }, trainTurns: 1, icon: "🏹" },
+    WARRIOR: { name: "Guerreiro", cost: { meat: 25 }, trainTurns: 1, icon: "🗡️", atk: 5, hp: 10 },
+    ARCHER:  { name: "Arqueiro",  cost: { meat: 30 }, trainTurns: 1, icon: "🏹", atk: 4, hp: 8  },
   },
   procgen: {
     // “começo”: 1 caminho e 1 monstro perto o suficiente para aparecer na visão inicial
@@ -396,6 +396,12 @@ function isFarFromAll(x, y, minDist) {
 function addNode(kind, x, y, discovered = true, hp = 10) {
   const id = state.world.nextId++;
   const node = { id, kind, x, y, discovered, hp };
+  // --- Stats de monstro (para combate real) ---
+  if (kind === "MONSTER") {
+    node.maxHp = hp;
+    // ataque simples, proporcional ao HP (você pode ajustar depois)
+    node.atk = Math.max(3, Math.floor(node.maxHp / 4));
+  }
 
   // v2: padroniza slots de tropas em nós (troopSlots/troopSlotsCap)
   ensureNodeTroopSlots(node);
@@ -736,7 +742,7 @@ function setSelectionInfo() {
     const n = nodeById(nodeId);
     el.selectionInfo.className = "card small";
     if (n.kind === "MONSTER") {
-      el.selectionInfo.innerHTML = `<b>Monstros</b><div class="muted">Nó ${n.id} — HP ${n.hp}. Selecione e clique em <b>Atacar (debug)</b>.</div>`;
+      el.selectionInfo.innerHTML = `<b>Monstros</b><div class="muted">Nó ${n.id} — HP ${n.hp}. Selecione e clique em <b>Atacar</b>.</div>`;
     } else if (n.kind === "OWNED") {
       el.selectionInfo.innerHTML =
          `<b>Território dominado</b>` +
@@ -867,7 +873,7 @@ function setBuildPanel() {
       el.buildPanel.innerHTML = `
         <div class="muted">Ações do nó (Monstros):</div>
         <div style="height:10px"></div>
-        <button class="btn wide primary" data-action="attack">Atacar (debug)</button>
+        <button class="btn wide primary" data-action="attack">Atacar</button>
         <div style="height:10px"></div>
 
         <div class="muted">Tropas prontas no território: <b>${readyHere}</b></div>
@@ -1395,19 +1401,81 @@ function endTurn() {
 }
 
 /* ----------------- Monster defeat (debug) ----------------- */
+/* ----------------- Monster fight (MVP) ----------------- */
 function attackSelectedMonsterDebug() {
   const id = state.selection.nodeId;
   if (id == null) return;
+
   const n = nodeById(id);
   if (!n || n.kind !== "MONSTER") return;
 
-  // derrota imediata (debug)
-  n.kind = "OWNED";
-  initOutpost(n); // <-- cria os 3 slots da sub-base
-  log(`Território dominado! Nó ${n.id} agora é seu.`, "good");
+  // garante stats (caso algum monstro antigo não tenha maxHp/atk)
+  if (typeof n.maxHp !== "number") n.maxHp = n.hp;
+  if (typeof n.atk !== "number") n.atk = Math.max(3, Math.floor((n.maxHp || 10) / 4));
 
-  // gera novos caminhos/monstros proceduralmente a partir daqui
-  spawnBranchesFrom(n.id);
+  // precisa ter tropas PRONTAS no território
+  ensureNodeTroopSlots(n);
+  const readyIdx = [];
+  for (let i = 0; i < n.troopSlots.length; i++) {
+    const t = n.troopSlots[i];
+    if (t && t.status === "ready") readyIdx.push(i);
+  }
+
+  if (readyIdx.length === 0) {
+    log(`Você não tem tropas prontas no Nó ${n.id} para atacar.`, "warn");
+    updateHUD();
+    return;
+  }
+
+  // 1) Jogador ataca: soma ATK das tropas prontas
+  let totalAtk = 0;
+  for (const idx of readyIdx) {
+    const t = n.troopSlots[idx];
+    const def = CFG.troops?.[t.type];
+    totalAtk += (def?.atk ?? 1);
+  }
+
+  n.hp = Math.max(0, n.hp - totalAtk);
+  log(`⚔️ Ataque no Nó ${n.id}: -${totalAtk} HP (restante ${n.hp}/${n.maxHp}).`, "");
+
+  // vitória?
+  if (n.hp <= 0) {
+    n.kind = "OWNED";
+    initOutpost(n); // mantém sua lógica: cria os 3 slots da sub-base
+    log(`✅ Território dominado! Nó ${n.id} agora é seu.`, "good");
+
+    // mantém seu procedural: abre novos caminhos/monstros
+    spawnBranchesFrom(n.id);
+    updateHUD();
+    return;
+  }
+
+  // 2) Monstro revida: dano simplificado (mata tropas inteiras, sem HP persistente)
+  let dmg = n.atk;
+  let killed = 0;
+
+  for (const idx of readyIdx) {
+    if (dmg <= 0) break;
+    const t = n.troopSlots[idx];
+    if (!t || t.status !== "ready") continue;
+
+    const def = CFG.troops?.[t.type];
+    const thp = (def?.hp ?? 6);
+
+    if (dmg >= thp) {
+      dmg -= thp;
+      n.troopSlots[idx] = null; // remove a tropa
+      killed++;
+    } else {
+      // não mata: paramos (MVP sem HP parcial)
+      dmg = 0;
+      break;
+    }
+  }
+
+  if (killed > 0) log(`💀 Contra-ataque do monstro: ${killed} tropa(s) foram derrotadas.`, "warn");
+  else log(`🛡️ Contra-ataque do monstro não derrubou tropas.`, "");
+
   updateHUD();
 }
 
@@ -1659,7 +1727,7 @@ function startNewGame() {
   el.menuOverlay.style.display = "none";
   el.log.innerHTML = "";
   log("Novo jogo iniciado (mapa procedural).", "good");
-  log("Dica: clique no monstro (nó vermelho) e use Atacar (debug) para ver ramificações.", "warn");
+  log("Dica: clique no monstro (nó vermelho) e use Atacar para lutar e expandir.", "warn");
   updateHUD();
 }
 
