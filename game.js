@@ -908,7 +908,7 @@ function setBuildPanel() {
         const slotLabel = `Slot ${i + 1}`;
 
         if (!t) {
-          rows += `<div class="muted" style="padding:10px;border:1px solid rgba(255,255,255,12);border-radius:10px">${slotLabel}: vazio</div>`;
+          rows += `<div class="muted" style="padding:10px;border:1px solid rgba(255,255,255,.12);border-radius:10px">${slotLabel}: vazio</div>`;
           continue;
         }
 
@@ -916,12 +916,12 @@ function setBuildPanel() {
         const label = `${def.icon} ${def.name}`;
 
         if (t.status === "training") {
-          rows += `<div class="muted" style="padding:10px;border:1px solid rgba(255,255,255,12);border-radius:10px">${slotLabel}: ${label} — treinando (${t.remainingTurns ?? "?"}T)</div>`;
+          rows += `<div class="muted" style="padding:10px;border:1px solid rgba(255,255,255,.12);border-radius:10px">${slotLabel}: ${label} — treinando (${t.remainingTurns ?? "?"}T)</div>`;
           continue;
         }
 
         if (t.status === "moving") {
-          rows += `<div class="muted" style="padding:10px;border:1px solid rgba(255,255,255,12);border-radius:10px">${slotLabel}: ${label} — em deslocamento (ETA ${t.eta ?? "?"})</div>`;
+          rows += `<div class="muted" style="padding:10px;border:1px solid rgba(255,255,255,.12);border-radius:10px">${slotLabel}: ${label} — em deslocamento (ETA ${t.eta ?? "?"})</div>`;
           continue;
         }
 
@@ -934,7 +934,7 @@ function setBuildPanel() {
             </button>
           `;
         } else {
-          rows += `<div style="padding:10px;border:1px solid rgba(255,255,255,12);border-radius:10px">${slotLabel}: ${label} ✅</div>`;
+          rows += `<div style="padding:10px;border:1px solid rgba(255,255,255,.12);border-radius:10px">${slotLabel}: ${label} ✅</div>`;
         }
       }
 
@@ -950,7 +950,7 @@ function setBuildPanel() {
         } else {
           moveHeader = `
             <div class="muted"><b>MOVER</b> — selecionadas: <b>${selectedCount}</b></div>
-            <div class="muted">Origem: <b>${m.order.fromId}</b> → Destino: <b>${m.order.toId}</b> (ETA: ${m.order.eta})</div>
+            <div class="muted">Origem: <b>${m.order.fromId}</b> → Destino: <b>${m.order.toId}</b> (ETA: ${m.order.steps})</div>
             <div style="height:10px"></div>
             <button class="btn wide primary" data-action="confirm-move">Confirmar</button>
             <div style="height:8px"></div>
