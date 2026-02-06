@@ -1848,14 +1848,17 @@ function drawBattleScene() {
 
   // terminou: VITÓRIA / DERROTA
   const win = !!B.result?.win;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
 
   ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 28px system-ui, -apple-system, Segoe UI, Roboto, Arial";
-  ctx.fillText(win ? "VITÓRIA" : "DERROTA", 16, canvas.height - 62);
+  ctx.font = "bold 40px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+  ctx.fillText(win ? "VITÓRIA" : "DERROTA", canvas.width / 2, canvas.height / 2 - 70);
 
-  // botão CONTINUAR (clicável no canvas)
-  const bw = 190, bh = 46;
-  const bx = 16, by = canvas.height - 52;
+  // botão CONTINUAR (CENTRALIZADO)
+  const bw = 220, bh = 54;
+  const bx = (canvas.width - bw) / 2;
+  const by = (canvas.height - bh) / 2 + 10;
 
   B.continueRect = { x: bx, y: by, w: bw, h: bh };
 
@@ -1865,12 +1868,17 @@ function drawBattleScene() {
   ctx.strokeRect(bx, by, bw, bh);
 
   ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 16px system-ui, -apple-system, Segoe UI, Roboto, Arial";
-  ctx.fillText("CONTINUAR", bx + 48, by + 29);
+  ctx.font = "bold 18px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+  ctx.fillText("CONTINUAR", bx + bw / 2, by + bh / 2);
 
+  // dica abaixo do botão
   ctx.fillStyle = "rgba(255,255,255,.65)";
   ctx.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
-  ctx.fillText("Clique para voltar ao mapa", bx + 20, by - 8);
+  ctx.fillText("Clique para voltar ao mapa", canvas.width / 2, by + bh + 28);
+
+  // restaura defaults para não afetar outros textos
+  ctx.textAlign = "start";
+  ctx.textBaseline = "alphabetic";
 }
 
 function drawHpBar(x, y, w, h, v, m, color, label) {
