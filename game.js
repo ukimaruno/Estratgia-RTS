@@ -2094,6 +2094,7 @@ function startNewGame() {
          done: false,
          result: null,         // { win: true/false, survivors: [...] }
          msg: "",
+      },
     },
   };
 
