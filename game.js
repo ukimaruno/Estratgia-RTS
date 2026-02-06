@@ -419,6 +419,7 @@ function addNode(kind, x, y, discovered = true, hp = 10) {
     node.maxHp = hp;
     // ataque simples, proporcional ao HP (você pode ajustar depois)
     node.atk = Math.max(3, Math.floor(node.maxHp / 4));
+    node.packSize = clamp(Math.round(node.maxHp / 10), 1, 8);
   }
 
   // v2: padroniza slots de tropas em nós (troopSlots/troopSlotsCap)
@@ -1449,6 +1450,379 @@ function endTurn() {
 
 /* ----------------- Monster defeat (debug) ----------------- */
 /* ----------------- Monster fight (MVP) ----------------- */
+
+/* ----------------- Battle (Auto 2D) ----------------- */
+
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+function buildBattleFromMonsterNode(n) {
+  // pega tropas prontas no nó (slots)
+  ensureNodeTroopSlots(n);
+
+  const usedSlots = [];
+  const allies = [];
+
+  for (let i = 0; i < n.troopSlots.length; i++) {
+    const t = n.troopSlots[i];
+    if (!t || t.status !== "ready") continue;
+
+    const def = CFG.troops?.[t.type] || { atk: 1, hp: 6, name: t.type };
+    usedSlots.push(i);
+
+    allies.push({
+      slotIdx: i,
+      type: t.type,
+      name: def.name || t.type,
+      atk: def.atk ?? 1,
+      hp: def.hp ?? 6,
+      maxHp: def.hp ?? 6,
+      x: 0, y: 0,
+      alive: true,
+      color: troopColor(t.type),
+    });
+  }
+
+  // sem tropas → não inicia
+  if (allies.length === 0) return null;
+
+  // garante stats do monstro
+  if (typeof n.maxHp !== "number") n.maxHp = n.hp;
+  if (typeof n.atk !== "number") n.atk = Math.max(3, Math.floor((n.maxHp || 10) / 4));
+
+  // quantos “monstros quadrados” aparecem
+  const pack = (typeof n.packSize === "number")
+    ? n.packSize
+    : clamp(Math.round((n.maxHp || 20) / 10), 1, 8);
+
+  const enemies = [];
+  const perHp = Math.ceil((n.maxHp || 20) / pack);
+  const perAtk = Math.max(1, Math.floor((n.atk || 4) / pack));
+
+  for (let i = 0; i < pack; i++) {
+    enemies.push({
+      idx: i,
+      atk: perAtk,
+      hp: perHp,
+      maxHp: perHp,
+      x: 0, y: 0,
+      alive: true,
+    });
+  }
+
+  return { allies, enemies, usedSlots };
+}
+
+function troopColor(type) {
+  // cores simples por tipo (você pode alterar depois)
+  if (type === "WARRIOR") return "#4aa3ff";
+  if (type === "ARCHER")  return "#5dff8a";
+  return "#ffd24a";
+}
+
+function beginBattleAgainstMonster(n) {
+  // sai de mover se estiver ativo (evita estados estranhos)
+  if (state.ui.move?.active) exitMoveMode();
+
+  const data = buildBattleFromMonsterNode(n);
+  if (!data) {
+    log(`Você não tem tropas prontas no Nó ${n.id} para atacar.`, "warn");
+    updateHUD();
+    return;
+  }
+
+  // decide e roda a batalha (resultado será o estado final da simulação)
+  const result = simulateInstantBattle(data.allies, data.enemies);
+
+  // ativa modo batalha (animação vai “encenar” o resultado)
+  const B = state.ui.battle;
+  B.active = true;
+  B.nodeId = n.id;
+  B.allies = data.allies;
+  B.enemies = data.enemies;
+  B.usedSlots = data.usedSlots.slice();
+  B.t = 0;
+  B.stepAcc = 0;
+  B.done = false;
+  B.result = result;
+  B.msg = "";
+
+  // posiciona unidades (esquerda = aliados, direita = inimigos)
+  layoutBattleUnits();
+
+  // HUD não deve sumir: mantém seleção no nó
+  state.selection.baseSelected = false;
+  state.selection.slotIdx = null;
+  state.selection.outpostSlot = null;
+  state.selection.nodeId = n.id;
+  updateHUD();
+}
+
+function layoutBattleUnits() {
+  const B = state.ui.battle;
+
+  // área “virtual” do canvas
+  const w = canvas.width, h = canvas.height;
+  const leftX = w * 0.25;
+  const rightX = w * 0.75;
+
+  // aliados em coluna
+  const aN = B.allies.length;
+  for (let i = 0; i < aN; i++) {
+    const u = B.allies[i];
+    u.x = leftX;
+    u.y = h * 0.25 + (i + 1) * (h * 0.5 / (aN + 1));
+  }
+
+  // inimigos em coluna
+  const eN = B.enemies.length;
+  for (let i = 0; i < eN; i++) {
+    const u = B.enemies[i];
+    u.x = rightX;
+    u.y = h * 0.25 + (i + 1) * (h * 0.5 / (eN + 1));
+  }
+}
+
+function simulateInstantBattle(allies, enemies) {
+  // ⚠️ Importante:
+  // Aqui decidimos o resultado final INSTANTANEAMENTE.
+  // A animação só “representa” o que aconteceu.
+
+  // clona hp para simulação
+  const A = allies.map(u => ({ ...u, hp: u.maxHp, alive: true }));
+  const E = enemies.map(u => ({ ...u, hp: u.maxHp, alive: true }));
+
+  function firstAlive(arr) { return arr.find(x => x.alive); }
+  function aliveCount(arr) { return arr.reduce((s,x)=>s+(x.alive?1:0),0); }
+
+  // combate por “ticks” determinísticos
+  // ordem: todos aliados batem (um hit cada), depois todos inimigos batem
+  // repete até um lado zerar
+  while (aliveCount(A) > 0 && aliveCount(E) > 0) {
+    // aliados atacam
+    for (const u of A) {
+      if (!u.alive) continue;
+      const t = firstAlive(E);
+      if (!t) break;
+      t.hp -= u.atk;
+      if (t.hp <= 0) { t.hp = 0; t.alive = false; }
+    }
+    if (aliveCount(E) === 0) break;
+
+    // inimigos atacam
+    for (const u of E) {
+      if (!u.alive) continue;
+      const t = firstAlive(A);
+      if (!t) break;
+      t.hp -= u.atk;
+      if (t.hp <= 0) { t.hp = 0; t.alive = false; }
+    }
+  }
+
+  const win = aliveCount(A) > 0 && aliveCount(E) === 0;
+
+  const survivors = A
+    .filter(x => x.alive)
+    .map(x => ({ slotIdx: x.slotIdx, type: x.type }));
+
+  return { win, survivors };
+}
+
+function updateBattleAnim() {
+  const B = state.ui.battle;
+  if (!B.active || B.done) return;
+
+  // avanço do tempo
+  B.t += 1 / 60; // aproximado (loop é requestAnimationFrame)
+  B.stepAcc += (1000 / 60);
+
+  // a cada stepMs, aplicamos 1 “rodada visual” seguindo o RESULTADO pré-decidido
+  while (B.stepAcc >= B.stepMs && !B.done) {
+    B.stepAcc -= B.stepMs;
+    battleVisualStep();
+  }
+}
+
+function battleVisualStep() {
+  const B = state.ui.battle;
+
+  const aliveA = B.allies.filter(x => x.alive);
+  const aliveE = B.enemies.filter(x => x.alive);
+
+  if (aliveA.length === 0 || aliveE.length === 0) {
+    endBattleApplyResult();
+    return;
+  }
+
+  // “encenação”:
+  // se o resultado final é vitória do jogador, vamos matando inimigos mais rapidamente,
+  // senão vamos matando aliados, até atingir o mesmo “final” do result.
+
+  if (B.result?.win) {
+    // mata 1 inimigo por step, até acabar
+    const t = aliveE[0];
+    t.hp -= Math.max(1, Math.ceil(t.maxHp * 0.6)); // dano visual forte
+    if (t.hp <= 0) { t.hp = 0; t.alive = false; }
+  } else {
+    // derrota: mata 1 aliado por step, até acabar
+    const t = aliveA[0];
+    t.hp -= Math.max(1, Math.ceil(t.maxHp * 0.6));
+    if (t.hp <= 0) { t.hp = 0; t.alive = false; }
+  }
+
+  // quando um lado “visual” zerar, termina
+  const left = B.allies.some(x => x.alive);
+  const right = B.enemies.some(x => x.alive);
+  if (!left || !right) {
+    endBattleApplyResult();
+  }
+}
+
+function endBattleApplyResult() {
+  const B = state.ui.battle;
+  if (B.done) return;
+
+  const nodeId = B.nodeId;
+  const n = nodeById(nodeId);
+  if (!n) {
+    // fallback: só encerra
+    B.done = true;
+    B.active = false;
+    updateHUD();
+    return;
+  }
+
+  // remove TODAS as tropas usadas do nó…
+  for (const idx of B.usedSlots) {
+    n.troopSlots[idx] = null;
+  }
+
+  if (B.result?.win) {
+    // …e adiciona de volta apenas sobreviventes (mantém status ready)
+    for (const s of B.result.survivors) {
+      // recoloca na primeira vaga disponível
+      const put = n.troopSlots.findIndex(x => !x);
+      if (put === -1) break;
+      n.troopSlots[put] = { type: s.type, status: "ready" };
+    }
+
+    // domina território
+    n.kind = "OWNED";
+    initOutpost(n);
+    spawnBranchesFrom(n.id);
+
+    log(`✅ Vitória! Você dominou o Nó ${n.id}.`, "good");
+  } else {
+    // derrota: monstros NÃO sofrem dano → reset hp
+    n.hp = n.maxHp;
+    log(`❌ Derrota! Suas tropas foram derrotadas no Nó ${n.id}.`, "warn");
+  }
+
+  // encerra modo batalha
+  B.done = true;
+  B.active = false;
+
+  // volta seleção para o nó
+  state.selection.baseSelected = false;
+  state.selection.slotIdx = null;
+  state.selection.outpostSlot = null;
+  state.selection.nodeId = n.id;
+
+  updateHUD();
+}
+
+function drawBattleScene() {
+  const B = state.ui.battle;
+
+  // fundo
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#0d1117";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // título
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "bold 18px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+  ctx.fillText("Batalha automática", 16, 28);
+
+  // barras “HP total”
+  const totalA = B.allies.reduce((s,u)=>s+(u.alive?u.hp:0),0);
+  const maxA   = B.allies.reduce((s,u)=>s+u.maxHp,0);
+  const totalE = B.enemies.reduce((s,u)=>s+(u.alive?u.hp:0),0);
+  const maxE   = B.enemies.reduce((s,u)=>s+u.maxHp,0);
+
+  drawHpBar(16, 44, 240, 12, totalA, maxA, "#4aa3ff", "Tropas");
+  drawHpBar(canvas.width - 256, 44, 240, 12, totalE, maxE, "#ff5d5d", "Monstros");
+
+  // linha do “encontro”
+  ctx.strokeStyle = "rgba(255,255,255,.18)";
+  ctx.beginPath();
+  ctx.moveTo(canvas.width/2, 80);
+  ctx.lineTo(canvas.width/2, canvas.height-20);
+  ctx.stroke();
+
+  // desenha unidades (bolinhas = aliados)
+  for (const u of B.allies) {
+    if (!u.alive) continue;
+    // movimento leve até o centro
+    const tx = canvas.width * 0.48;
+    u.x += (tx - u.x) * 0.06;
+
+    ctx.fillStyle = u.color;
+    ctx.beginPath();
+    ctx.arc(u.x, u.y, 10, 0, Math.PI*2);
+    ctx.fill();
+
+    // hp mini
+    drawMiniHp(u.x-12, u.y+14, 24, 4, u.hp, u.maxHp, u.color);
+  }
+
+  // quadrados = inimigos
+  for (const u of B.enemies) {
+    if (!u.alive) continue;
+    const tx = canvas.width * 0.52;
+    u.x += (tx - u.x) * 0.06;
+
+    ctx.fillStyle = "#ff5d5d";
+    ctx.fillRect(u.x-10, u.y-10, 20, 20);
+
+    drawMiniHp(u.x-12, u.y+14, 24, 4, u.hp, u.maxHp, "#ff5d5d");
+  }
+
+  // mensagem final
+  if (!B.active && B.done) return;
+  const aliveA = B.allies.some(x=>x.alive);
+  const aliveE = B.enemies.some(x=>x.alive);
+
+  if (!aliveA || !aliveE) {
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 22px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.fillText(aliveA ? "VITÓRIA" : "DERROTA", 16, canvas.height - 26);
+  } else {
+    ctx.fillStyle = "rgba(255,255,255,.75)";
+    ctx.font = "14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.fillText("A batalha está ocorrendo automaticamente...", 16, canvas.height - 26);
+  }
+}
+
+function drawHpBar(x, y, w, h, v, m, color, label) {
+  ctx.fillStyle = "rgba(255,255,255,.12)";
+  ctx.fillRect(x, y, w, h);
+  const pct = (m <= 0) ? 0 : clamp(v/m, 0, 1);
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, w * pct, h);
+
+  ctx.fillStyle = "rgba(255,255,255,.85)";
+  ctx.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+  ctx.fillText(`${label}: ${Math.ceil(v)}/${Math.ceil(m)}`, x, y - 4);
+}
+
+function drawMiniHp(x, y, w, h, v, m, color) {
+  ctx.fillStyle = "rgba(255,255,255,.18)";
+  ctx.fillRect(x, y, w, h);
+  const pct = (m <= 0) ? 0 : clamp(v/m, 0, 1);
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, w * pct, h);
+}
+
 function attackSelectedMonsterDebug() {
   const id = state.selection.nodeId;
   if (id == null) return;
@@ -1456,81 +1830,15 @@ function attackSelectedMonsterDebug() {
   const n = nodeById(id);
   if (!n || n.kind !== "MONSTER") return;
 
-  // garante stats (caso algum monstro antigo não tenha maxHp/atk)
-  if (typeof n.maxHp !== "number") n.maxHp = n.hp;
-  if (typeof n.atk !== "number") n.atk = Math.max(3, Math.floor((n.maxHp || 10) / 4));
-
-  // precisa ter tropas PRONTAS no território
-  ensureNodeTroopSlots(n);
-  const readyIdx = [];
-  for (let i = 0; i < n.troopSlots.length; i++) {
-    const t = n.troopSlots[i];
-    if (t && t.status === "ready") readyIdx.push(i);
-  }
-
-  if (readyIdx.length === 0) {
-    log(`Você não tem tropas prontas no Nó ${n.id} para atacar.`, "warn");
-    updateHUD();
-    return;
-  }
-
-  // 1) Jogador ataca: soma ATK das tropas prontas
-  let totalAtk = 0;
-  for (const idx of readyIdx) {
-    const t = n.troopSlots[idx];
-    const def = CFG.troops?.[t.type];
-    totalAtk += (def?.atk ?? 1);
-  }
-
-  n.hp = Math.max(0, n.hp - totalAtk);
-  log(`⚔️ Ataque no Nó ${n.id}: -${totalAtk} HP (restante ${n.hp}/${n.maxHp}).`, "");
-
-  // vitória?
-  if (n.hp <= 0) {
-    n.kind = "OWNED";
-    initOutpost(n); // mantém sua lógica: cria os 3 slots da sub-base
-    log(`✅ Território dominado! Nó ${n.id} agora é seu.`, "good");
-
-    // mantém seu procedural: abre novos caminhos/monstros
-    spawnBranchesFrom(n.id);
-    updateHUD();
-    return;
-  }
-
-  // 2) Monstro revida: dano simplificado (mata tropas inteiras, sem HP persistente)
-  let dmg = n.atk;
-  let killed = 0;
-
-  for (const idx of readyIdx) {
-    if (dmg <= 0) break;
-    const t = n.troopSlots[idx];
-    if (!t || t.status !== "ready") continue;
-
-    const def = CFG.troops?.[t.type];
-    const thp = (def?.hp ?? 6);
-
-    if (dmg >= thp) {
-      dmg -= thp;
-      n.troopSlots[idx] = null; // remove a tropa
-      killed++;
-    } else {
-      // não mata: paramos (MVP sem HP parcial)
-      dmg = 0;
-      break;
-    }
-  }
-
-  if (killed > 0) log(`💀 Contra-ataque do monstro: ${killed} tropa(s) foram derrotadas.`, "warn");
-  else log(`🛡️ Contra-ataque do monstro não derrubou tropas.`, "");
-
-  updateHUD();
+  // ✅ inicia batalha automática (resultado instantâneo + animação)
+  beginBattleAgainstMonster(n);
 }
 
 /* ----------------- Input ----------------- */
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
 canvas.addEventListener("mousedown", (e) => {
-  if (!state) return;
+  if (state?.ui?.battle?.active) return;
 
   const r = canvas.getBoundingClientRect();
   const sx = e.clientX - r.left;
@@ -1609,7 +1917,7 @@ canvas.addEventListener("mousedown", (e) => {
 });
 
 canvas.addEventListener("mousemove", (e) => {
-  if (!state) return;
+  if ((state?.ui?.battle?.active)) return;
   if (!state.input.rmbDown) return;
 
   const r = canvas.getBoundingClientRect();
@@ -1627,7 +1935,7 @@ canvas.addEventListener("mousemove", (e) => {
 });
 
 window.addEventListener("mouseup", (e) => {
-  if (!state) return;
+  if (state?.ui?.battle?.active) return;
   if (e.button === 2) state.input.rmbDown = false;
 });
 
@@ -1771,6 +2079,21 @@ function startNewGame() {
     ui: {
       trainPick: null,
       move: { active: false, fromNodeId: null, selectedSlots: null, order: null },
+
+      // ✅ novo: modo batalha (overlay 2D)
+      battle: {
+         
+         active: false,
+         nodeId: null,
+         allies: [],
+         enemies: [],
+         usedSlots: [],        // índices das troopSlots usadas no ataque
+         t: 0,
+         stepAcc: 0,
+         stepMs: 140,          // velocidade “dos golpes”
+         done: false,
+         result: null,         // { win: true/false, survivors: [...] }
+         msg: "",
     },
   };
 
@@ -2068,6 +2391,13 @@ function drawWorld() {
 
 function loop() {
   requestAnimationFrame(loop);
+  
+  if (state?.ui?.battle?.active) {
+     updateBattleAnim();
+     drawBattleScene();
+     return;
+  }
+
   drawWorld();
 }
 loop();
