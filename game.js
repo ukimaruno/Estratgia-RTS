@@ -1215,9 +1215,30 @@ function updateHUD() {
   el.resMeat.textContent = Math.floor(state.resources.meat).toString();
   el.turnNow.textContent = state.turn.toString();
 
-  // NOVO
   if (el.resPop) {
     el.resPop.textContent = `${getPopulationUsed()}/${getPopulationCap()}`;
+  }
+
+  // ✅ Blindagem: se estiver em modo MOVER e a seleção sumir, fixa de volta na ORIGEM
+  const m = state.ui.move;
+  const selEmpty =
+    !state.selection.baseSelected &&
+    state.selection.slotIdx == null &&
+    state.selection.nodeId == null &&
+    !state.selection.outpostSlot;
+
+  if (m?.active && selEmpty) {
+    if (m.fromNodeId === state.world.baseNodeId) {
+      state.selection.baseSelected = true;
+      state.selection.slotIdx = null;
+      state.selection.nodeId = null;
+      state.selection.outpostSlot = null;
+    } else {
+      state.selection.baseSelected = false;
+      state.selection.slotIdx = null;
+      state.selection.nodeId = m.fromNodeId;
+      state.selection.outpostSlot = null;
+    }
   }
 
   setSelectionInfo();
@@ -1546,6 +1567,13 @@ canvas.addEventListener("mousedown", (e) => {
 
     clearSelection();
     state.selection.nodeId = node.id;
+    updateHUD();
+    return;
+  }
+
+  // Se estiver em modo MOVER, NÃO deixa o HUB sumir ao clicar em área inválida
+  if (state.ui.move?.active) {
+    log("Destino inválido. Clique em um nó/BASE válido para definir o destino, ou clique em Cancelar no HUB.", "warn");
     updateHUD();
     return;
   }
