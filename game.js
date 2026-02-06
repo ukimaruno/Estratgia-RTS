@@ -1545,7 +1545,11 @@ function beginBattleAgainstMonster(n) {
   B.done = false;
   B.result = result;
   B.msg = "";
-
+  B.events = result.events || [];
+  B.eventIdx = 0;
+  B.applied = false;
+  B.showContinue = false;
+  B.continueRect = null;
   // posiciona unidades (esquerda = aliados, direita = inimigos)
   layoutBattleUnits();
 
@@ -1583,38 +1587,53 @@ function layoutBattleUnits() {
 }
 
 function simulateInstantBattle(allies, enemies) {
-  // ⚠️ Importante:
-  // Aqui decidimos o resultado final INSTANTANEAMENTE.
-  // A animação só “representa” o que aconteceu.
-
-  // clona hp para simulação
   const A = allies.map(u => ({ ...u, hp: u.maxHp, alive: true }));
   const E = enemies.map(u => ({ ...u, hp: u.maxHp, alive: true }));
 
-  function firstAlive(arr) { return arr.find(x => x.alive); }
+  const events = []; // ✅ replay
+
+  function firstAliveIndex(arr) {
+    for (let i = 0; i < arr.length; i++) if (arr[i].alive) return i;
+    return -1;
+  }
   function aliveCount(arr) { return arr.reduce((s,x)=>s+(x.alive?1:0),0); }
 
-  // combate por “ticks” determinísticos
-  // ordem: todos aliados batem (um hit cada), depois todos inimigos batem
-  // repete até um lado zerar
   while (aliveCount(A) > 0 && aliveCount(E) > 0) {
     // aliados atacam
-    for (const u of A) {
+    for (let ai = 0; ai < A.length; ai++) {
+      const u = A[ai];
       if (!u.alive) continue;
-      const t = firstAlive(E);
-      if (!t) break;
-      t.hp -= u.atk;
+
+      const ti = firstAliveIndex(E);
+      if (ti === -1) break;
+
+      const t = E[ti];
+      const dmg = Math.max(1, u.atk);
+
+      // aplica
+      t.hp -= dmg;
       if (t.hp <= 0) { t.hp = 0; t.alive = false; }
+
+      // registra evento
+      events.push({ side: "A", attacker: ai, target: ti, dmg });
     }
     if (aliveCount(E) === 0) break;
 
     // inimigos atacam
-    for (const u of E) {
+    for (let ei = 0; ei < E.length; ei++) {
+      const u = E[ei];
       if (!u.alive) continue;
-      const t = firstAlive(A);
-      if (!t) break;
-      t.hp -= u.atk;
+
+      const ti = firstAliveIndex(A);
+      if (ti === -1) break;
+
+      const t = A[ti];
+      const dmg = Math.max(1, u.atk);
+
+      t.hp -= dmg;
       if (t.hp <= 0) { t.hp = 0; t.alive = false; }
+
+      events.push({ side: "E", attacker: ei, target: ti, dmg });
     }
   }
 
@@ -1624,7 +1643,7 @@ function simulateInstantBattle(allies, enemies) {
     .filter(x => x.alive)
     .map(x => ({ slotIdx: x.slotIdx, type: x.type }));
 
-  return { win, survivors };
+  return { win, survivors, events };
 }
 
 function updateBattleAnim() {
@@ -1645,48 +1664,69 @@ function updateBattleAnim() {
 function battleVisualStep() {
   const B = state.ui.battle;
 
-  const aliveA = B.allies.filter(x => x.alive);
-  const aliveE = B.enemies.filter(x => x.alive);
-
-  if (aliveA.length === 0 || aliveE.length === 0) {
-    endBattleApplyResult();
+  // acabou replay?
+  if (B.eventIdx >= B.events.length) {
+    // encerra visualmente (não sai ainda)
+    finishBattleScreen();
     return;
   }
 
-  // “encenação”:
-  // se o resultado final é vitória do jogador, vamos matando inimigos mais rapidamente,
-  // senão vamos matando aliados, até atingir o mesmo “final” do result.
-
-  if (B.result?.win) {
-    // mata 1 inimigo por step, até acabar
-    const t = aliveE[0];
-    t.hp -= Math.max(1, Math.ceil(t.maxHp * 0.6)); // dano visual forte
-    if (t.hp <= 0) { t.hp = 0; t.alive = false; }
+  const ev = B.events[B.eventIdx++];
+  if (ev.side === "A") {
+    const a = B.allies[ev.attacker];
+    const t = B.enemies[ev.target];
+    if (a?.alive && t?.alive) {
+      // aplica dano VISUAL em passos menores (mais tempo)
+      applyVisualDamage(t, ev.dmg);
+      // pequeno “lunge” para dar sensação de impacto
+      a._lunge = 1.0;
+    }
   } else {
-    // derrota: mata 1 aliado por step, até acabar
-    const t = aliveA[0];
-    t.hp -= Math.max(1, Math.ceil(t.maxHp * 0.6));
-    if (t.hp <= 0) { t.hp = 0; t.alive = false; }
+    const a = B.enemies[ev.attacker];
+    const t = B.allies[ev.target];
+    if (a?.alive && t?.alive) {
+      applyVisualDamage(t, ev.dmg);
+      a._lunge = 1.0;
+    }
+  }
+}
+
+function applyVisualDamage(target, dmg) {
+  // tira HP aos poucos para ficar mais emocionante
+  const chunks = Math.max(1, Math.min(4, dmg)); // 1 a 4 “micro-passos”
+  target.hp -= dmg;
+  if (target.hp <= 0) {
+    target.hp = 0;
+    target.alive = false;
+    target._fade = 1.0; // para animar sumindo
+  } else {
+    target._hit = 1.0; // flash de dano
+  }
+}
+
+function finishBattleScreen() {
+  const B = state.ui.battle;
+
+  // aplica o resultado no MUNDO uma única vez,
+  // mas mantém a tela de batalha aberta até clicar CONTINUAR.
+  if (!B.applied) {
+    endBattleApplyResult();  // aplica vitória/derrota, mas NÃO deve desligar battle.active agora (ver passo 5)
+    B.applied = true;
   }
 
-  // quando um lado “visual” zerar, termina
-  const left = B.allies.some(x => x.alive);
-  const right = B.enemies.some(x => x.alive);
-  if (!left || !right) {
-    endBattleApplyResult();
-  }
+  B.done = true;
+  B.showContinue = true;
 }
 
 function endBattleApplyResult() {
   const B = state.ui.battle;
-  if (B.done) return;
+  if (B.applied) return; // ✅ evita aplicar 2x (novo comportamento)
 
   const nodeId = B.nodeId;
   const n = nodeById(nodeId);
   if (!n) {
-    // fallback: só encerra
-    B.done = true;
-    B.active = false;
+    // fallback: só marca como aplicado e deixa a tela finalizar
+    B.applied = true;
     updateHUD();
     return;
   }
@@ -1698,8 +1738,7 @@ function endBattleApplyResult() {
 
   if (B.result?.win) {
     // …e adiciona de volta apenas sobreviventes (mantém status ready)
-    for (const s of B.result.survivors) {
-      // recoloca na primeira vaga disponível
+    for (const s of (B.result.survivors || [])) {
       const put = n.troopSlots.findIndex(x => !x);
       if (put === -1) break;
       n.troopSlots[put] = { type: s.type, status: "ready" };
@@ -1713,15 +1752,15 @@ function endBattleApplyResult() {
     log(`✅ Vitória! Você dominou o Nó ${n.id}.`, "good");
   } else {
     // derrota: monstros NÃO sofrem dano → reset hp
-    n.hp = n.maxHp;
+    if (typeof n.maxHp === "number") n.hp = n.maxHp;
     log(`❌ Derrota! Suas tropas foram derrotadas no Nó ${n.id}.`, "warn");
   }
 
-  // encerra modo batalha
-  B.done = true;
-  B.active = false;
+  // ✅ importante: NÃO fecha a batalha aqui.
+  // Quem fecha é o botão CONTINUAR (item 7)
+  B.applied = true;
 
-  // volta seleção para o nó
+  // volta seleção para o nó (opcional, mas mantém consistência)
   state.selection.baseSelected = false;
   state.selection.slotIdx = null;
   state.selection.outpostSlot = null;
@@ -1744,10 +1783,10 @@ function drawBattleScene() {
   ctx.fillText("Batalha automática", 16, 28);
 
   // barras “HP total”
-  const totalA = B.allies.reduce((s,u)=>s+(u.alive?u.hp:0),0);
-  const maxA   = B.allies.reduce((s,u)=>s+u.maxHp,0);
-  const totalE = B.enemies.reduce((s,u)=>s+(u.alive?u.hp:0),0);
-  const maxE   = B.enemies.reduce((s,u)=>s+u.maxHp,0);
+  const totalA = B.allies.reduce((s, u) => s + (u.alive ? u.hp : 0), 0);
+  const maxA   = B.allies.reduce((s, u) => s + u.maxHp, 0);
+  const totalE = B.enemies.reduce((s, u) => s + (u.alive ? u.hp : 0), 0);
+  const maxE   = B.enemies.reduce((s, u) => s + u.maxHp, 0);
 
   drawHpBar(16, 44, 240, 12, totalA, maxA, "#4aa3ff", "Tropas");
   drawHpBar(canvas.width - 256, 44, 240, 12, totalE, maxE, "#ff5d5d", "Monstros");
@@ -1755,52 +1794,83 @@ function drawBattleScene() {
   // linha do “encontro”
   ctx.strokeStyle = "rgba(255,255,255,.18)";
   ctx.beginPath();
-  ctx.moveTo(canvas.width/2, 80);
-  ctx.lineTo(canvas.width/2, canvas.height-20);
+  ctx.moveTo(canvas.width / 2, 80);
+  ctx.lineTo(canvas.width / 2, canvas.height - 90);
   ctx.stroke();
 
   // desenha unidades (bolinhas = aliados)
   for (const u of B.allies) {
     if (!u.alive) continue;
+
     // movimento leve até o centro
     const tx = canvas.width * 0.48;
     u.x += (tx - u.x) * 0.06;
 
+    // efeito simples de “impacto” (se existir _hit/_fade, não atrapalha)
+    ctx.globalAlpha = u._fade ? Math.max(0, u._fade) : 1;
+
     ctx.fillStyle = u.color;
     ctx.beginPath();
-    ctx.arc(u.x, u.y, 10, 0, Math.PI*2);
+    ctx.arc(u.x, u.y, 10, 0, Math.PI * 2);
     ctx.fill();
 
     // hp mini
-    drawMiniHp(u.x-12, u.y+14, 24, 4, u.hp, u.maxHp, u.color);
+    ctx.globalAlpha = 1;
+    drawMiniHp(u.x - 12, u.y + 14, 24, 4, u.hp, u.maxHp, u.color);
   }
 
   // quadrados = inimigos
   for (const u of B.enemies) {
     if (!u.alive) continue;
+
     const tx = canvas.width * 0.52;
     u.x += (tx - u.x) * 0.06;
 
-    ctx.fillStyle = "#ff5d5d";
-    ctx.fillRect(u.x-10, u.y-10, 20, 20);
+    ctx.globalAlpha = u._fade ? Math.max(0, u._fade) : 1;
 
-    drawMiniHp(u.x-12, u.y+14, 24, 4, u.hp, u.maxHp, "#ff5d5d");
+    ctx.fillStyle = "#ff5d5d";
+    ctx.fillRect(u.x - 10, u.y - 10, 20, 20);
+
+    ctx.globalAlpha = 1;
+    drawMiniHp(u.x - 12, u.y + 14, 24, 4, u.hp, u.maxHp, "#ff5d5d");
   }
 
-  // mensagem final
-  if (!B.active && B.done) return;
-  const aliveA = B.allies.some(x=>x.alive);
-  const aliveE = B.enemies.some(x=>x.alive);
-
-  if (!aliveA || !aliveE) {
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 22px system-ui, -apple-system, Segoe UI, Roboto, Arial";
-    ctx.fillText(aliveA ? "VITÓRIA" : "DERROTA", 16, canvas.height - 26);
-  } else {
+  // rodapé: status ou fim + botão
+  if (!B.done) {
     ctx.fillStyle = "rgba(255,255,255,.75)";
     ctx.font = "14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
     ctx.fillText("A batalha está ocorrendo automaticamente...", 16, canvas.height - 26);
+
+    // enquanto não terminou, não tem botão
+    B.continueRect = null;
+    return;
   }
+
+  // terminou: VITÓRIA / DERROTA
+  const win = !!B.result?.win;
+
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "bold 28px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+  ctx.fillText(win ? "VITÓRIA" : "DERROTA", 16, canvas.height - 62);
+
+  // botão CONTINUAR (clicável no canvas)
+  const bw = 190, bh = 46;
+  const bx = 16, by = canvas.height - 52;
+
+  B.continueRect = { x: bx, y: by, w: bw, h: bh };
+
+  ctx.fillStyle = "rgba(255,255,255,.12)";
+  ctx.fillRect(bx, by, bw, bh);
+  ctx.strokeStyle = "rgba(255,255,255,.28)";
+  ctx.strokeRect(bx, by, bw, bh);
+
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "bold 16px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+  ctx.fillText("CONTINUAR", bx + 48, by + 29);
+
+  ctx.fillStyle = "rgba(255,255,255,.65)";
+  ctx.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+  ctx.fillText("Clique para voltar ao mapa", bx + 20, by - 8);
 }
 
 function drawHpBar(x, y, w, h, v, m, color, label) {
@@ -1838,7 +1908,28 @@ function attackSelectedMonsterDebug() {
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
 canvas.addEventListener("mousedown", (e) => {
-  if (state?.ui?.battle?.active) return;
+  // ✅ Se está em batalha: só aceita clique no CONTINUAR quando terminado
+  if (state?.ui?.battle?.active) {
+    const B = state.ui.battle;
+
+    if (B.done && B.continueRect) {
+      const rect = canvas.getBoundingClientRect();
+      const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
+      const my = (e.clientY - rect.top) * (canvas.height / rect.height);
+
+      const r = B.continueRect;
+      if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) {
+        // fecha batalha e volta pro mapa
+        B.active = false;
+        B.done = false;
+        B.showContinue = false; // se você tiver esse flag
+        B.continueRect = null;
+
+        updateHUD();
+      }
+    }
+    return;
+  }
 
   const r = canvas.getBoundingClientRect();
   const sx = e.clientX - r.left;
@@ -1865,7 +1956,7 @@ canvas.addEventListener("mousedown", (e) => {
     return;
   }
 
-  // 2) clique no CASTELO (base) // clique no castelo (baseSelected)
+  // 2) clique no CASTELO (base)
   if (hitTestBase(w.x, w.y)) {
     if (state.ui.move?.active) { setMoveDestination(state.world.baseNodeId); return; } // ✅ novo
     clearSelection();
@@ -2094,6 +2185,12 @@ function startNewGame() {
          done: false,
          result: null,         // { win: true/false, survivors: [...] }
          msg: "",
+
+         events: [],
+         eventIdx: 0,
+         applied: false,
+         showContinue: false,
+         continueRect: null,
       },
     },
   };
