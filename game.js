@@ -276,7 +276,25 @@ function enterMoveMode(fromNodeId) {
   state.ui.trainPick = null;
 
   log("Modo MOVER ativado. Clique em um nó no mapa para definir o destino.", "warn");
+  pinMoveOriginSelection();   // ✅ novo
   updateHUD();
+}
+
+function pinMoveOriginSelection() {
+  const m = state?.ui?.move;
+  if (!m?.active || m.fromNodeId == null) return;
+
+  // sempre limpa seleções que não são o "centro" da origem
+  state.selection.slotIdx = null;
+  state.selection.outpostSlot = null;
+
+  if (m.fromNodeId === state.world.baseNodeId) {
+    state.selection.baseSelected = true;
+    state.selection.nodeId = null;
+  } else {
+    state.selection.baseSelected = false;
+    state.selection.nodeId = m.fromNodeId;
+  }
 }
 
 function exitMoveMode() {
@@ -494,6 +512,7 @@ function setMoveDestination(destNodeId) {
 
   const dn = nodeById(destNodeId);
   log(`Destino definido: Nó ${destNodeId} (${dn?.kind || "?"}) — distância: ${m.order.steps} etapa(s).`, "good");
+  pinMoveOriginSelection(); // mantém o HUB na origem, mesmo após escolher destino
   updateHUD();
 }
 
@@ -1082,6 +1101,13 @@ function setBuildPanel() {
         <div style="height:12px"></div>
         ${rows.join("<div style='height:8px'></div>")}
       `;
+      return;
+    }
+
+    // ✅ Se estiver em modo MOVER, o HUB NÃO pode sumir: mostra painel de movimento mesmo sem seleção
+    if (state.ui.move?.active) {
+      pinMoveOriginSelection();
+      setBuildPanel(); // re-render já com a seleção fixada na origem
       return;
     }
 
